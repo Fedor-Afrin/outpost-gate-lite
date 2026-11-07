@@ -20,7 +20,8 @@ services:
     volumes:
       - ./app:/opt/ubuntu-router/app       # правки кода без пересборки
       - ./web:/opt/ubuntu-router/web
-      - ./config/router.yaml:/etc/ubuntu-router/router.yaml
+      - ./config:/etc/ubuntu-router            # папка целиком: нужна для атомарной записи router.yaml
+      - ./data:/var/lib/ubuntu-router          # снимки конфига (data/snapshots)
     networks:
       wan:
         priority: 1000   # подключается первой -> eth0
