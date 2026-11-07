@@ -1,0 +1,36 @@
+# Режим DEV: запуск на рабочем компьютере.
+# Контейнер в СВОЁМ network namespace — сеть хоста он не видит и не меняет.
+#   docker compose up --build
+#   http://localhost:8000      — веб-интерфейс
+#   http://localhost:8000/docs — Swagger
+services:
+  router:
+    build: .
+    image: ubuntu-router:dev
+    container_name: ubuntu-router-dev
+    environment:
+      ROUTER_MODE: dev
+    cap_add:
+      - NET_ADMIN        # действует только внутри своего namespace
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/opt/ubuntu-router/app       # правки кода без пересборки
+      - ./web:/opt/ubuntu-router/web
+      - ./config/router.yaml:/etc/ubuntu-router/router.yaml
+    networks:
+      wan:
+        priority: 1000   # подключается первой -> eth0
+      lan:
+        priority: 100    # -> eth1
+
+# Две тестовые сети — получаем eth0 (wan) и eth1 (lan) внутри контейнера
+networks:
+  wan:
+    driver: bridge
+  lan:
+    driver: bridge
+    internal: true

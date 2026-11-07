@@ -1,0 +1,23 @@
+# Режим HOST: контейнер управляет сетью СЕРВЕРА.
+# !!! НЕ запускать на рабочем компьютере — только на VM / выделенном сервере !!!
+#
+# Перед запуском:
+#   sudo cp daemon.json.example /etc/docker/daemon.json && sudo systemctl restart docker
+#   docker compose up -d --build
+services:
+  router:
+    build: ../..
+    image: ubuntu-router:latest
+    container_name: ubuntu-router
+    restart: unless-stopped
+    network_mode: host          # реальные интерфейсы сервера
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      ROUTER_MODE: host
+      API_HOST: 192.168.88.1    # слушать ТОЛЬКО LAN-адрес, не WAN!
+      API_PORT: "8000"
+    volumes:
+      - /etc/ubuntu-router:/etc/ubuntu-router
+      - /var/lib/ubuntu-router:/var/lib/ubuntu-router
