@@ -9,23 +9,53 @@
   <aside>
     <h2>Ubuntu Router</h2>
     <nav>
-      <a href="#" class="active">Interfaces</a>
-      <a href="#" class="disabled">IP</a>
-      <a href="#" class="disabled">Firewall</a>
-      <a href="#" class="disabled">Tools</a>
-      <a href="#" class="disabled">System</a>
+      <a href="#interfaces" data-page="interfaces">Interfaces</a>
+      <div class="group">IP</div>
+      <a href="#ip-addresses" data-page="ip-addresses" class="sub">Addresses</a>
+      <a class="sub disabled">Routes</a>
+      <a class="sub disabled">DHCP Server</a>
+      <a class="sub disabled">DNS</a>
+      <a class="disabled">Firewall</a>
+      <a class="disabled">Tools</a>
+      <a class="disabled">System</a>
     </nav>
-  </aside>
-  <main>
-    <h1>Interfaces</h1>
     <p id="sysinfo"></p>
-    <table>
-      <thead>
-        <tr><th></th><th>Name</th><th>MAC</th><th>MTU</th><th>Addresses</th><th>RX</th><th>TX</th></tr>
-      </thead>
-      <tbody id="ifaces"></tbody>
-    </table>
+  </aside>
+
+  <main>
+    <!-- Interfaces -->
+    <section id="page-interfaces" class="page">
+      <h1>Interfaces</h1>
+      <table>
+        <thead>
+          <tr><th></th><th>Name</th><th>MAC</th><th>MTU</th><th>Addresses</th><th>RX</th><th>TX</th></tr>
+        </thead>
+        <tbody id="ifaces"></tbody>
+      </table>
+    </section>
+
+    <!-- IP → Addresses -->
+    <section id="page-ip-addresses" class="page">
+      <h1>IP → Addresses</h1>
+
+      <form id="addr-form" class="toolbar">
+        <input name="address" placeholder="192.168.88.1/24" required>
+        <select name="interface" id="addr-iface" required></select>
+        <input name="comment" placeholder="comment">
+        <button type="submit">+ Add</button>
+        <span id="addr-error" class="error"></span>
+      </form>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>Flags</th><th>Address</th><th>Network</th><th>Interface</th><th>Comment</th><th></th></tr>
+        </thead>
+        <tbody id="addrs"></tbody>
+      </table>
+      <p class="legend">Flags: <b>X</b> — disabled, <b>I</b> — invalid, <b>D</b> — dynamic (не из конфига)</p>
+    </section>
   </main>
+
   <script src="js/app.js"></script>
 </body>
 </html>

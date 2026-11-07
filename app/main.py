@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import interfaces, system
+from app.api.routes import interfaces, ip_addresses, system
 from app.core.config import settings
 
 app = FastAPI(
@@ -16,7 +16,8 @@ app = FastAPI(
 # API — разделы как в меню RouterOS
 app.include_router(system.router, prefix="/api/system", tags=["System"])
 app.include_router(interfaces.router, prefix="/api/interfaces", tags=["Interfaces"])
-# Следующие этапы: ip/addresses, ip/routes, ip/firewall, ip/dhcp-server, tools
+app.include_router(ip_addresses.router, prefix="/api/ip/addresses", tags=["IP / Addresses"])
+# Следующие шаги этапа 1: ip/routes, ip/dhcp-client, ip/dhcp-server, ip/dns
 
 # Веб-интерфейс (статические файлы) — монтируется последним
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"

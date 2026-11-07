@@ -1,13 +1,36 @@
 * { box-sizing: border-box; }
 body { margin: 0; display: flex; font-family: system-ui, sans-serif; background: #f4f5f7; color: #222; }
-aside { width: 200px; min-height: 100vh; background: #2b3a4a; color: #fff; padding: 16px; }
+
+aside { width: 210px; min-height: 100vh; background: #2b3a4a; color: #fff; padding: 16px; display: flex; flex-direction: column; }
 aside h2 { font-size: 16px; margin: 0 0 16px; }
-nav a { display: block; color: #cfd8e3; text-decoration: none; padding: 6px 8px; border-radius: 4px; }
+nav a { display: block; color: #cfd8e3; text-decoration: none; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+nav a:hover { background: #34475a; }
 nav a.active { background: #3d5166; color: #fff; }
+nav a.sub { padding-left: 22px; }
 nav a.disabled { opacity: .45; pointer-events: none; }
+nav .group { color: #8fa3b8; font-size: 12px; text-transform: uppercase; margin: 10px 0 2px 8px; }
+#sysinfo { margin-top: auto; font-size: 12px; color: #8fa3b8; line-height: 1.5; }
+
 main { flex: 1; padding: 24px; }
+.page { display: none; }
+.page.active { display: block; }
+h1 { font-size: 20px; margin: 0 0 16px; }
+
 table { width: 100%; border-collapse: collapse; background: #fff; }
 th, td { padding: 8px 10px; border-bottom: 1px solid #e3e6ea; text-align: left; font-size: 14px; }
 th { background: #eef1f4; }
 .flag-r { color: #1a7f37; font-weight: bold; }
 .flag-x { color: #b42318; font-weight: bold; }
+td.flags { font-weight: bold; color: #6b4f00; font-family: monospace; }
+tr.row-disabled td { color: #9aa3ad; }
+tr.row-dynamic td { color: #3b5b8c; }
+td.actions { white-space: nowrap; text-align: right; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar input, .toolbar select { padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
+button { padding: 5px 10px; border: 1px solid #c8ced6; background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px; }
+button:hover { background: #eef1f4; }
+button[type=submit] { background: #2b3a4a; color: #fff; border-color: #2b3a4a; }
+button.danger { color: #b42318; }
+.error { color: #b42318; font-size: 13px; }
+.legend { font-size: 12px; color: #6b7480; }
