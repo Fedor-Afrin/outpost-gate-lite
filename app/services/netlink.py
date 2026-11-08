@@ -70,3 +70,89 @@ def addr_del(ifname: str, cidr: str) -> None:
         except NetlinkError as e:
             if e.code not in (errno.EADDRNOTAVAIL, errno.ENODEV):
                 raise NetlinkOpError(f"не удалось удалить {cidr} с {ifname}: {e}") from e
+
+
+# --- маршруты -----------------------------------------------------------------
+RT_TABLE_MAIN = 254
+RTN_UNICAST = 1
+RT_SCOPE_LINK = 253
+RTPROT_KERNEL = 2   # connected — ядро создаёт само при назначении адреса
+RTPROT_STATIC = 4   # наши статические маршруты помечаем этим proto
+
+
+def kernel_ipv4_routes() -> list[dict]:
+    """Маршруты основной таблицы:
+    [{'dst': '0.0.0.0/0', 'gateway': '172.18.0.1', 'interface': 'eth0', 'metric': 0, 'proto': 3}, ...]
+    """
+    with _ipr() as ipr:
+        names = {l["index"]: l.get_attr("IFLA_IFNAME") for l in ipr.get_links()}
+        out = []
+        for r in ipr.get_routes(family=2, table=RT_TABLE_MAIN):
+            if r["type"] != RTN_UNICAST:
+                continue
+            dst = r.get_attr("RTA_DST") or "0.0.0.0"
+            out.append({
+                "dst": f"{dst}/{r['dst_len']}",
+                "gateway": r.get_attr("RTA_GATEWAY"),
+                "interface": names.get(r.get_attr("RTA_OIF")),
+                "metric": r.get_attr("RTA_PRIORITY") or 0,
+                "proto": r["proto"],
+            })
+        return out
+
+
+def _route_kwargs(ipr, dst: str, gateway: str | None, ifname: str | None, metric: int) -> dict:
+    net = ipaddress.ip_network(dst)
+    kw = {"dst_len": net.prefixlen, "priority": metric, "table": RT_TABLE_MAIN}
+    if net.prefixlen:
+        kw["dst"] = str(net.network_address)
+    if gateway:
+        kw["gateway"] = gateway
+    if ifname:
+        kw["oif"] = _index(ipr, ifname)
+        if not gateway:
+            kw["scope"] = RT_SCOPE_LINK  # как `ip route add ... dev eth1`
+    return kw
+
+
+def _route_present(dst, gateway, ifname, metric) -> bool:
+    for r in kernel_ipv4_routes():
+        if r["dst"] == dst and r["metric"] == metric:
+            if gateway and r["gateway"] == gateway:
+                return True
+            if not gateway and r["interface"] == ifname and not r["gateway"]:
+                return True
+    return False
+
+
+def route_add(dst: str, gateway: str | None = None, ifname: str | None = None, metric: int = 1) -> None:
+    from pyroute2 import NetlinkError
+    via = gateway or ifname
+    with _ipr() as ipr:
+        kw = _route_kwargs(ipr, dst, gateway, ifname, metric)
+        try:
+            ipr.route("add", proto=RTPROT_STATIC, **kw)
+        except NetlinkError as e:
+            if e.code == errno.EEXIST:
+                if _route_present(dst, gateway, ifname, metric):
+                    return  # точно такой маршрут уже есть
+                raise NetlinkOpError(
+                    f"маршрут {dst} с distance={metric} уже существует через другой шлюз") from e
+            if e.code == errno.ENETUNREACH:
+                raise NetlinkOpError(
+                    f"шлюз {via} недоступен: нет подключённой сети, в которую он входит") from e
+            raise NetlinkOpError(f"не удалось добавить маршрут {dst} via {via}: {e}") from e
+
+
+def route_del(dst: str, gateway: str | None = None, ifname: str | None = None, metric: int = 1) -> None:
+    from pyroute2 import NetlinkError
+    with _ipr() as ipr:
+        try:
+            kw = _route_kwargs(ipr, dst, gateway, ifname, metric)
+        except NetlinkOpError:
+            return  # интерфейса нет — маршрута тоже нет
+        try:
+            ipr.route("del", **kw)
+        except NetlinkError as e:
+            if e.code not in (errno.ESRCH, errno.ENODEV):
+                raise NetlinkOpError(f"не удалось удалить маршрут {dst}: {e}") from e

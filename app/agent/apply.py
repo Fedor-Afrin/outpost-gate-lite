@@ -5,12 +5,12 @@ router.yaml — единый источник правды (аналог /export
 При старте контейнера агент приводит систему к конфигу:
   - ip_forward                       готово
   - адреса на интерфейсах            готово (этап 1)
-  - маршруты                         этап 1
+  - маршруты                         готово (этап 1)
   - DHCP-клиент / сервер, DNS        этап 1 (dnsmasq)
   - nftables: filter + NAT           этап 2 (nft -f, атомарно)
   - Safe Mode                        этап System
 """
-from app.services import addresses, sysctl
+from app.services import addresses, routes, sysctl
 
 
 def apply_startup() -> None:
@@ -24,6 +24,11 @@ def apply_startup() -> None:
         addresses.apply_all()
     except Exception as e:  # агент не должен мешать запуску API
         print(f"[agent] ERROR: применение адресов: {e}")
+
+    try:  # маршруты — строго после адресов: шлюз должен быть в подключённой сети
+        routes.apply_all()
+    except Exception as e:
+        print(f"[agent] ERROR: применение маршрутов: {e}")
 
 
 if __name__ == "__main__":

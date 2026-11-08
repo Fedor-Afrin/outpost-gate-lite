@@ -34,3 +34,5 @@ button[type=submit] { background: #2b3a4a; color: #fff; border-color: #2b3a4a; }
 button.danger { color: #b42318; }
 .error { color: #b42318; font-size: 13px; }
 .legend { font-size: 12px; color: #6b7480; }
+tr.row-inactive td { color: #b42318; }
+.toolbar input.narrow { width: 70px; }
