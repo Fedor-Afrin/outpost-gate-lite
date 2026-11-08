@@ -432,6 +432,186 @@ $("#l2tp-form").addEventListener("submit", async (ev) => {
   } catch (e) { $("#l2tp-error").textContent = e.message; }
 });
 
+// ---------------------------------------------------------------- Firewall
+let fwTab = "input";
+let fwEditId = null;     // id правила, которое редактируем (null — новое)
+let pfEditId = null;
+let fwData = null;
+const ZONE = { any: "Любой", wan: "WAN", lan: "LAN", vpn: "VPN" };
+const ACTION = { accept: '<span class="act accept">Разрешить</span>', drop: '<span class="act drop">Запретить</span>',
+                 reject: '<span class="act drop">Отклонить</span>' };
+const PROTO = { all: "Все", tcp: "TCP", udp: "UDP", icmp: "ICMP", "tcp+udp": "TCP и UDP" };
+const HINTS = {
+  input: "Кто может подключаться к самому роутеру. Правила проверяются сверху вниз, первое совпавшее решает; затем — системные правила.",
+  forward: "Трафик через роутер между LAN, WAN и VPN. Например: запретить устройству интернет или открыть центру по VPN только нужный порт.",
+};
+
+function selectFwTab(tab) {
+  fwTab = tab;
+  document.querySelectorAll("#fw-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  $("#fw-rules-panel").hidden = !(tab === "input" || tab === "forward");
+  $("#fw-forwards-panel").hidden = tab !== "forwards";
+  $("#fw-ruleset-panel").hidden = tab !== "ruleset";
+  document.querySelectorAll(".fwd-col").forEach((c) => { c.hidden = tab !== "forward"; });
+  closeFwForm();
+  loadFirewall().catch(console.error);
+}
+
+$("#fw-tabs").addEventListener("click", (ev) => {
+  const t = ev.target.closest(".tab");
+  if (t) selectFwTab(t.dataset.tab);
+});
+
+const counter = (x) => x.packets ? `${x.packets} пак. / ${fmt(x.bytes)}` : "—";
+const cidr = (v) => v ?? '<span class="hint">0.0.0.0/0</span>';
+
+async function loadFirewall() {
+  if (fwTab === "ruleset") {
+    $("#fw-ruleset").textContent = (await api("GET", "/api/firewall/ruleset")).text;
+    return;
+  }
+  fwData = await api("GET", "/api/firewall");
+  const z = fwData.zones;
+  $("#fw-zones").innerHTML = (fwData.active ? '<span class="badge lan">фаервол активен</span>'
+      : '<span class="badge wan">не активен — включите LAN</span>')
+    + ` WAN: <b>${esc(z.wan ?? "—")}</b> · LAN: <b>${esc(z.lan ?? "—")}</b> · VPN: <b>${esc(z.vpn ?? "—")}</b>`;
+
+  if (fwTab === "forwards") {
+    $("#pf-list").innerHTML = fwData.forwards.map((f) => `
+      <tr class="${f.enabled ? "" : "row-disabled"}"><td>${f.id}</td><td>${PROTO[f.protocol]}</td><td>${esc(f.wan_port)}</td>
+        <td>${esc(f.to_ip)}</td><td>${f.to_port ?? esc(f.wan_port)}</td><td>${cidr(f.src)}</td>
+        <td class="desc">${esc(f.description ?? "")}</td><td>${counter(f)}</td>
+        <td class="actions"><button type="button" data-pf-edit="${f.id}">Изменить</button>
+          <button type="button" data-pf-del="${f.id}" class="danger">Удалить</button></td></tr>`).join("")
+      || '<tr><td colspan="9" class="hint">пробросов нет</td></tr>';
+    return;
+  }
+
+  $("#fw-rules-hint").textContent = HINTS[fwTab];
+  const rules = fwData.rules.filter((r) => r.chain === fwTab);
+  const fwd = fwTab === "forward";
+  $("#fw-rules").innerHTML = rules.map((r, i) => `
+    <tr class="${r.enabled ? "" : "row-disabled"}">
+      <td>${i + 1}</td><td>${ACTION[r.action]}</td><td>${ZONE[r.in_zone]}</td><td>${cidr(r.src)}</td>
+      ${fwd ? `<td>${ZONE[r.out_zone]}</td><td>${cidr(r.dst)}</td>` : ""}
+      <td>${PROTO[r.protocol]}</td><td>${esc(r.src_ports ?? "Все")}</td><td>${esc(r.dst_ports ?? "Все")}</td>
+      <td class="desc">${esc(r.description ?? "")}</td><td>${counter(r)}</td>
+      <td class="actions">
+        <button type="button" data-move="up" data-id="${r.id}" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button type="button" data-move="down" data-id="${r.id}" ${i === rules.length - 1 ? "disabled" : ""}>↓</button>
+        <button type="button" data-edit="${r.id}">Изменить</button>
+        <button type="button" data-del="${r.id}" class="danger">Удалить</button></td>
+    </tr>`).join("") || `<tr><td colspan="${fwd ? 12 : 10}" class="hint">своих правил нет — работают только системные</td></tr>`;
+  $("#fw-system").innerHTML = fwData.system[fwTab].map((x) => `<li>${esc(x)}</li>`).join("")
+    + (fwd ? "" : fwData.system.nat.map((x) => `<li>NAT: ${esc(x)}</li>`).join(""));
+}
+
+// --- форма правила ---
+function openFwForm(rule) {
+  const f = $("#fw-form");
+  fwEditId = rule ? rule.id : null;
+  $("#fw-form-title").textContent = rule ? `Правило #${rules_index(rule)} — изменить` : (fwTab === "input"
+    ? "Новое правило: входящие на роутер" : "Новое правило: транзит");
+  $("#fw-save").textContent = rule ? "Сохранить" : "Добавить";
+  const r = rule ?? { action: "accept", protocol: "tcp", in_zone: fwTab === "input" ? "wan" : "lan",
+                      out_zone: "any", enabled: true };
+  f.action.value = r.action; f.protocol.value = r.protocol;
+  f.in_zone.value = r.in_zone; f.out_zone.value = r.out_zone;
+  f.src.value = r.src ?? ""; f.dst.value = r.dst ?? "";
+  f.src_ports.value = r.src_ports ?? ""; f.dst_ports.value = r.dst_ports ?? "";
+  f.description.value = r.description ?? ""; f.enabled.checked = r.enabled;
+  f.querySelectorAll(".fwd-only").forEach((el) => { el.hidden = fwTab !== "forward"; });
+  fwProtoChanged();
+  f.hidden = false;
+  $("#fw-error").textContent = "";
+}
+const rules_index = (rule) => fwData.rules.filter((r) => r.chain === rule.chain).findIndex((r) => r.id === rule.id) + 1;
+
+function closeFwForm() { $("#fw-form").hidden = true; $("#pf-form").hidden = true; fwEditId = pfEditId = null; }
+
+function fwProtoChanged() {
+  const f = $("#fw-form");
+  const ports = f.protocol.value === "tcp" || f.protocol.value === "udp";
+  f.querySelectorAll(".ports input").forEach((i) => { i.disabled = !ports; if (!ports) i.value = ""; });
+}
+
+$("#fw-add").addEventListener("click", () => openFwForm(null));
+$("#fw-cancel").addEventListener("click", closeFwForm);
+$("#fw-form").addEventListener("change", (ev) => { if (ev.target.name === "protocol") fwProtoChanged(); });
+
+$("#fw-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const body = {
+    chain: fwTab, action: f.action.value, protocol: f.protocol.value,
+    in_zone: f.in_zone.value, out_zone: fwTab === "forward" ? f.out_zone.value : "any",
+    src: f.src.value || null, dst: fwTab === "forward" ? f.dst.value || null : null,
+    src_ports: f.src_ports.value || null, dst_ports: f.dst_ports.value || null,
+    description: f.description.value || null, enabled: f.enabled.checked,
+  };
+  try {
+    await api(fwEditId ? "PUT" : "POST", fwEditId ? `/api/firewall/rules/${fwEditId}` : "/api/firewall/rules", body);
+    closeFwForm();
+    await loadFirewall();
+  } catch (e) { $("#fw-error").textContent = e.message; }
+});
+
+$("#fw-rules").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  $("#fw-error").textContent = "";
+  try {
+    if (b.dataset.edit) openFwForm(fwData.rules.find((r) => r.id === Number(b.dataset.edit)));
+    else if (b.dataset.del) { await api("DELETE", `/api/firewall/rules/${b.dataset.del}`); await loadFirewall(); }
+    else if (b.dataset.move) {
+      await api("POST", `/api/firewall/rules/${b.dataset.id}/move`, { direction: b.dataset.move });
+      await loadFirewall();
+    }
+  } catch (e) { $("#fw-error").textContent = e.message; }
+});
+
+// --- форма проброса ---
+function openPfForm(fwd) {
+  const f = $("#pf-form");
+  pfEditId = fwd ? fwd.id : null;
+  $("#pf-form-title").textContent = fwd ? `Проброс #${fwd.id} — изменить` : "Новый проброс";
+  $("#pf-save").textContent = fwd ? "Сохранить" : "Добавить";
+  const x = fwd ?? { protocol: "tcp", enabled: true };
+  f.protocol.value = x.protocol; f.wan_port.value = x.wan_port ?? ""; f.to_ip.value = x.to_ip ?? "";
+  f.to_port.value = x.to_port ?? ""; f.src.value = x.src ?? ""; f.description.value = x.description ?? "";
+  f.enabled.checked = x.enabled;
+  f.hidden = false;
+  $("#pf-error").textContent = "";
+}
+
+$("#pf-add").addEventListener("click", () => openPfForm(null));
+$("#pf-cancel").addEventListener("click", closeFwForm);
+
+$("#pf-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const body = {
+    protocol: f.protocol.value, wan_port: f.wan_port.value, to_ip: f.to_ip.value,
+    to_port: f.to_port.value ? Number(f.to_port.value) : null, src: f.src.value || null,
+    description: f.description.value || null, enabled: f.enabled.checked,
+  };
+  try {
+    await api(pfEditId ? "PUT" : "POST", pfEditId ? `/api/firewall/forwards/${pfEditId}` : "/api/firewall/forwards", body);
+    closeFwForm();
+    await loadFirewall();
+  } catch (e) { $("#pf-error").textContent = e.message; }
+});
+
+$("#pf-list").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  $("#pf-error").textContent = "";
+  try {
+    if (b.dataset.pfEdit) openPfForm(fwData.forwards.find((x) => x.id === Number(b.dataset.pfEdit)));
+    else if (b.dataset.pfDel) { await api("DELETE", `/api/firewall/forwards/${b.dataset.pfDel}`); await loadFirewall(); }
+  } catch (e) { $("#pf-error").textContent = e.message; }
+});
+
 // ---------------------------------------------------------------- Interfaces
 let interfacesCache = [];
 
@@ -581,6 +761,7 @@ const pages = {
   "wan": loadWan,
   "lan": loadLan,
   "vpn": loadVpn,
+  "firewall": loadFirewall,
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,
@@ -599,5 +780,6 @@ function show() {
 
 window.addEventListener("hashchange", show);
 selectVpnTab("wireguard");
+selectFwTab("input");
 loadSystem().catch(console.error);
 show();

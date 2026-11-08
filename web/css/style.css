@@ -70,3 +70,23 @@ table.compact th, table.compact td { padding: 6px 10px; }
 .status-grid .full { grid-column: 1 / -1; }
 .status-grid code { font-size: 12px; word-break: break-all; }
 textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; border: 1px solid #c8ced6; border-radius: 4px; }
+
+/* --- Firewall (в духе OCI Security Lists) --- */
+.zones { font-size: 13px; color: #3d5166; margin: -6px 0 12px; display: flex; gap: 10px; align-items: center; }
+.fw-table td, .fw-table th { font-size: 13px; white-space: nowrap; }
+.fw-table td.desc { white-space: normal; min-width: 160px; }
+.act { font-weight: 600; font-size: 12px; }
+.act.accept { color: #1a7f37; }
+.act.drop { color: #b42318; }
+.form.oci { max-width: 860px; border-left: 3px solid #3d5166; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
+.grid2 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #3d5166; }
+.grid2 input, .grid2 select { padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
+.grid2 input:disabled { background: #f0f2f4; }
+.form label.wide-row { max-width: none; }
+.form label.wide-row > input { width: 100%; max-width: 560px; }
+.system-rules { max-width: 860px; margin-top: 16px; background: #f8f9fa; }
+.system-rules ul { margin: 0; padding-left: 20px; font-size: 13px; color: #3d5166; line-height: 1.7; }
+pre.code { background: #1e2733; color: #d8e1ea; padding: 16px; border-radius: 6px; font-size: 12.5px;
+           overflow: auto; max-width: 1000px; line-height: 1.45; }
+button:disabled { opacity: .4; cursor: default; }

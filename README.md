@@ -30,4 +30,5 @@ docker compose up --build
 - [x] LAN: мост br-lan, dnsmasq (DHCP + DNS), закреплённые адреса, NAT, базовый фаервол
 - [x] VPN → WireGuard: импорт .conf, full / split, kill switch, NAT или site-to-site
 - [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
-- [ ] Status, Firewall, Tools, System, CLI
+- [x] Firewall: правила в стиле OCI Security Lists (входящие, транзит), проброс портов, счётчики, итоговый nftables
+- [ ] Status, Tools, System, CLI
