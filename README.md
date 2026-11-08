@@ -24,7 +24,7 @@ docker compose up --build
 
 ## Дорожная карта
 - [x] Каркас, список интерфейсов
-- [ ] IP-адреса, маршруты
+- [x] IP-адреса, маршруты
 - [ ] Firewall + NAT (nftables)
 - [ ] DHCP-сервер
 - [ ] Safe Mode, export/import конфига

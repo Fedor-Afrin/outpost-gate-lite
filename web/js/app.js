@@ -117,10 +117,72 @@ $("#addrs").addEventListener("click", async (ev) => {
   }
 });
 
+// ---------------------------------------------------------------- IP → Routes
+async function loadRoutes() {
+  const list = await api("GET", "/api/ip/routes");
+  $("#routes").innerHTML = list.map((r, n) => {
+    const flags = (r.disabled ? "X" : "") + (r.dynamic ? "D" : "") + (r.active ? "A" : "")
+                + (r.connected ? "C" : "") + (r.static ? "S" : "");
+    const actions = r.dynamic ? "" : `
+        <button data-act="toggle" data-id="${r.id}" data-disabled="${r.disabled}">
+          ${r.disabled ? "Enable" : "Disable"}</button>
+        <button data-act="remove" data-id="${r.id}" class="danger">Remove</button>`;
+    const cls = [r.disabled && "row-disabled", r.dynamic && "row-dynamic",
+                 r.static && !r.active && !r.disabled && "row-inactive"].filter(Boolean).join(" ");
+    return `
+      <tr class="${cls}">
+        <td>${n}</td>
+        <td class="flags">${flags}</td>
+        <td>${esc(r.dst_address)}</td>
+        <td>${esc(r.gateway)}</td>
+        <td>${r.distance}</td>
+        <td>${esc(r.interface)}</td>
+        <td>${esc(r.comment)}</td>
+        <td class="actions">${actions}</td>
+      </tr>`;
+  }).join("");
+}
+
+$("#route-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  $("#route-error").textContent = "";
+  try {
+    await api("POST", "/api/ip/routes", {
+      dst_address: f.get("dst_address") || "0.0.0.0/0",
+      gateway: f.get("gateway"),
+      distance: Number(f.get("distance") || 1),
+      comment: f.get("comment") || null,
+    });
+    ev.target.reset();
+    await loadRoutes();
+  } catch (e) {
+    $("#route-error").textContent = e.message;
+  }
+});
+
+$("#routes").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  $("#route-error").textContent = "";
+  try {
+    if (btn.dataset.act === "toggle") {
+      await api("PATCH", `/api/ip/routes/${id}`, { disabled: btn.dataset.disabled !== "true" });
+    } else if (btn.dataset.act === "remove") {
+      await api("DELETE", `/api/ip/routes/${id}`);
+    }
+    await loadRoutes();
+  } catch (e) {
+    $("#route-error").textContent = e.message;
+  }
+});
+
 // ---------------------------------------------------------------- навигация
 const pages = {
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
+  "ip-routes": loadRoutes,
 };
 let timer = null;
 
