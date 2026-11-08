@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.8.0">
+  <link rel="stylesheet" href="css/style.css?v=0.8.1">
 </head>
 <body>
   <!-- вход -->
@@ -12,19 +12,19 @@
       <h2>Ubuntu Router</h2>
       <p class="hint">Войдите, чтобы управлять роутером.</p>
       <label>Пользователь <input name="name" autocomplete="username" value="admin" required></label>
-      <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+      <label>Пароль <input name="password" type="password" autocomplete="current-password"></label>
       <button type="submit">Войти</button>
       <span id="login-error" class="error"></span>
-      <p class="hint small">Первый запуск: пароль admin — в <code>docker compose logs router</code>.</p>
+      <p class="hint small">Первый вход: <b>admin</b>, пароль пустой (только из локальной сети).</p>
     </form>
   </div>
 
   <!-- обязательная смена пароля -->
   <div id="pwchange" class="overlay" hidden>
     <form id="pwchange-form" class="card login-card">
-      <h2>Смените пароль</h2>
-      <p class="hint">Пароль был выдан автоматически или администратором — задайте свой (не короче 8 символов).</p>
-      <label>Текущий пароль <input name="old" type="password" autocomplete="current-password" required></label>
+      <h2 id="pwchange-title">Смените пароль</h2>
+      <p class="hint" id="pwchange-hint">Пароль был выдан администратором — задайте свой (не короче 8 символов).</p>
+      <label id="pwchange-old">Текущий пароль <input name="old" type="password" autocomplete="current-password"></label>
       <label>Новый пароль <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
       <label>Ещё раз <input name="new2" type="password" autocomplete="new-password" minlength="8" required></label>
       <button type="submit">Сохранить</button>
@@ -60,6 +60,10 @@
       <button type="button" id="safe-rollback" class="danger">Откатить сейчас</button>
     </div>
     <div id="safe-event" class="safe-event" hidden></div>
+    <div id="nopw-banner" class="nopw-banner" hidden>
+      Пароль администратора <b>не задан</b>: войти может любой из локальной сети.
+      <button type="button" id="nopw-set">Задать пароль</button>
+    </div>
     <!-- WAN -->
     <section id="page-wan" class="page">
       <h1>WAN</h1>
@@ -597,6 +601,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.8.0"></script>
+  <script src="js/app.js?v=0.8.1"></script>
 </body>
 </html>

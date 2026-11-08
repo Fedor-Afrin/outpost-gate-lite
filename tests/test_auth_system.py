@@ -31,16 +31,31 @@ def test_password_hashing():
     assert auth.hash_password("correct horse") != h          # соль разная
 
 
-def test_first_run_admin(data, monkeypatch, capsys):
+def test_first_run_admin_without_password(data, monkeypatch):
     monkeypatch.delenv("ROUTER_ADMIN_PASSWORD", raising=False)
     auth.ensure_admin()
-    out = capsys.readouterr().out
-    password = out.split("пароль: ")[1].split()[0]
-    assert auth.list_users() == [{"name": "admin", "role": "full", "must_change": True}]
-    user, token = auth.login("admin", password, "1.1.1.1")
-    assert user.must_change
-    auth.ensure_admin()                                    # второй раз ничего не делает
+    assert auth.list_users() == [{"name": "admin", "role": "full", "must_change": False, "has_password": False}]
+    user, token = auth.login("admin", "", "192.168.88.20")            # из LAN — пустой пароль
+    assert not user.has_password and not user.must_change
+    assert auth.user_from_token(token).name == "admin"
+    with pytest.raises(auth.AuthError, match="локальной сети"):
+        auth.login("admin", "", "8.8.4.4")                            # из интернета — нельзя
+    with pytest.raises(auth.AuthError):
+        auth.login("admin", "anything", "192.168.88.20")              # непустой пароль не подходит
+    auth.ensure_admin()                                               # второй раз ничего не делает
     assert len(auth.list_users()) == 1
+
+
+def test_set_first_password(data, monkeypatch):
+    monkeypatch.delenv("ROUTER_ADMIN_PASSWORD", raising=False)
+    auth.ensure_admin()
+    _, old_token = auth.login("admin", "", "127.0.0.1")
+    new_token = auth.change_own_password("admin", "", "MyPassword1")
+    assert auth.user_from_token(old_token) is None                    # сессия без пароля закрыта
+    assert auth.user_from_token(new_token).has_password
+    with pytest.raises(auth.AuthError):
+        auth.login("admin", "", "127.0.0.1")                          # пустой больше не подходит
+    assert auth.login("admin", "MyPassword1", "203.0.113.5")[0].name == "admin"   # с паролем — откуда угодно
     assert oct((data / "users.json").stat().st_mode)[-3:] == "600"
 
 
