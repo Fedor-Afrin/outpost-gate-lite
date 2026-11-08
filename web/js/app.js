@@ -147,10 +147,13 @@ async function loadLan() {
         <td>${p.link_up ? '<span class="flag-r">есть</span>' : '<span class="flag-x">нет</span>'}</td>
         <td>${esc(p.mac)}</td></tr>`).join("");
   $("#lan-leases").innerHTML = l.leases.map((d) => `
-    <tr><td>${esc(d.hostname ?? "—")}</td><td>${esc(d.ip)}</td><td>${esc(d.mac)}</td>
+    <tr><td>${esc(d.name ?? d.hostname ?? "—")}</td><td>${esc(d.ip)}</td><td>${esc(d.mac)}</td>
         <td>${esc(d.vendor ?? "—")}</td>
-        <td>${d.expires ? new Date(d.expires * 1000).toLocaleString() : "бессрочно"}</td></tr>`).join("")
-    || '<tr><td colspan="5" class="hint">пока никого</td></tr>';
+        <td>${d.expires ? new Date(d.expires * 1000).toLocaleString() : "бессрочно"}</td>
+        <td class="actions">${d.static ? '<span class="badge lan">закреплён</span>'
+          : `<button type="button" data-pin="${esc(d.mac)}" data-ip="${esc(d.ip)}" data-name="${esc(d.hostname ?? "")}">Закрепить</button>`}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="hint">пока никого</td></tr>';
+  renderStatic(l.static_leases);
   if (!lanFormLoaded) { fillLanForm(l); lanFormLoaded = true; }
 }
 
@@ -180,6 +183,147 @@ $("#lan-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     $("#lan-error").textContent = e.message;
   }
+});
+
+// ---------------------------------------------------------------- LAN: закреплённые адреса
+function renderStatic(list) {
+  $("#static-leases").innerHTML = list.map((x) => `
+    <tr class="${x.valid ? "" : "row-inactive"}"><td>${esc(x.name ?? "—")}</td><td>${esc(x.ip)}</td><td>${esc(x.mac)}</td>
+      <td>${!x.valid ? "вне сети LAN — не работает" : x.in_pool ? "внутри пула DHCP" : ""}</td>
+      <td class="actions"><button type="button" data-unpin="${esc(x.mac)}" class="danger">Открепить</button></td></tr>`).join("")
+    || '<tr><td colspan="5" class="hint">нет</td></tr>';
+}
+
+$("#lan-leases").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-pin]");
+  if (!b) return;
+  const f = $("#static-form");
+  f.mac.value = b.dataset.pin;
+  f.ip.value = b.dataset.ip;
+  f.name.value = b.dataset.name;
+  $("#static-card").scrollIntoView({ behavior: "smooth" });
+  f.ip.focus();
+});
+
+$("#static-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#static-error").textContent = "";
+  try {
+    renderStatic(await api("POST", "/api/lan/static-leases",
+      { mac: f.mac.value, ip: f.ip.value, name: f.name.value || null }));
+    f.reset();
+    await loadLan();
+  } catch (e) { $("#static-error").textContent = e.message; }
+});
+
+$("#static-leases").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-unpin]");
+  if (!b) return;
+  $("#static-error").textContent = "";
+  try {
+    renderStatic(await api("DELETE", `/api/lan/static-leases/${encodeURIComponent(b.dataset.unpin)}`));
+    await loadLan();
+  } catch (e) { $("#static-error").textContent = e.message; }
+});
+
+// ---------------------------------------------------------------- VPN → WireGuard
+let wgFormLoaded = false;
+const splitList = (v) => v.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+
+function wgModeChanged() {
+  const f = $("#wg-form");
+  f.killswitch.disabled = f.querySelector("input[name=mode]:checked")?.value !== "full";
+}
+
+function fillWgForm(c, privateKeySet) {
+  const f = $("#wg-form");
+  f.enabled.checked = c.enabled;
+  f.querySelector(`input[name=mode][value=${c.mode}]`).checked = true;
+  f.killswitch.checked = c.killswitch;
+  f.nat.checked = c.nat;
+  f.private_key.value = c.private_key ?? "";
+  f.private_key.placeholder = privateKeySet ? "задан — пусто = не менять" : "";
+  f.addresses.value = c.addresses.join(", ");
+  f.dns.value = c.dns.join(", ");
+  f.mtu.value = c.mtu;
+  f.peer_public_key.value = c.peer_public_key ?? "";
+  f.preshared_key.value = c.preshared_key ?? "";
+  f.endpoint.value = c.endpoint ?? "";
+  f.allowed_ips.value = c.allowed_ips.join(", ");
+  f.keepalive.value = c.keepalive;
+  wgModeChanged();
+}
+
+function ago(ts) {
+  const s = Math.round(Date.now() / 1000 - ts);
+  return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString();
+}
+
+async function loadVpn() {
+  const w = await api("GET", "/api/vpn/wireguard");
+  $("#vs-state").innerHTML = !w.config.enabled ? "выключен"
+    : w.connected ? '<span class="flag-r">подключён</span>'
+    : w.active ? '<span class="flag-x">нет связи с сервером</span>' : '<span class="flag-x">ошибка — см. docker logs</span>';
+  $("#vs-hs").textContent = w.latest_handshake ? ago(w.latest_handshake) : "—";
+  $("#vs-endpoint").textContent = w.config.endpoint ? `${w.config.endpoint}${w.endpoint_ip ? " (" + w.endpoint_ip + ")" : ""}` : "—";
+  $("#vs-traffic").textContent = w.active ? `↓ ${fmt(w.rx_bytes)}  ↑ ${fmt(w.tx_bytes)}` : "—";
+  $("#vs-pub").textContent = w.public_key ?? "—";
+  $("#vs-error").textContent = w.error ?? "";
+  if (!wgFormLoaded) { fillWgForm(w.config, w.private_key_set); wgFormLoaded = true; }
+}
+
+$("#wg-form").addEventListener("change", (ev) => { if (ev.target.name === "mode") wgModeChanged(); });
+
+$("#wg-file").addEventListener("change", async (ev) => {
+  const file = ev.target.files[0];
+  if (file) $("#wg-import").value = await file.text();
+});
+
+$("#wg-parse").addEventListener("click", async () => {
+  $("#wg-parse-msg").textContent = "";
+  $("#wg-error").textContent = "";
+  try {
+    const c = await api("POST", "/api/vpn/wireguard/parse", { text: $("#wg-import").value });
+    c.enabled = true;
+    fillWgForm(c, false);
+    $("#wg-parse-msg").textContent = "Поля заполнены — проверьте и нажмите «Применить»";
+  } catch (e) { $("#wg-error").textContent = e.message; }
+});
+
+$("#wg-genkey").addEventListener("click", async () => {
+  try {
+    const k = await api("POST", "/api/vpn/wireguard/genkey");
+    $("#wg-form").private_key.value = k.private_key;
+    $("#wg-ok").textContent = `Публичный ключ роутера: ${k.public_key}`;
+  } catch (e) { $("#wg-error").textContent = e.message; }
+});
+
+$("#wg-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#wg-error").textContent = "";
+  $("#wg-ok").textContent = "";
+  try {
+    const w = await api("PUT", "/api/vpn/wireguard", {
+      enabled: f.enabled.checked,
+      mode: f.querySelector("input[name=mode]:checked").value,
+      killswitch: f.killswitch.checked,
+      nat: f.nat.checked,
+      private_key: f.private_key.value || null,
+      addresses: splitList(f.addresses.value),
+      dns: splitList(f.dns.value),
+      mtu: Number(f.mtu.value || 1420),
+      peer_public_key: f.peer_public_key.value || null,
+      preshared_key: f.preshared_key.value || null,
+      endpoint: f.endpoint.value || null,
+      allowed_ips: splitList(f.allowed_ips.value),
+      keepalive: Number(f.keepalive.value || 0),
+    });
+    fillWgForm(w.config, w.private_key_set);
+    $("#wg-ok").textContent = "Применено";
+    await loadVpn();
+  } catch (e) { $("#wg-error").textContent = e.message; }
 });
 
 // ---------------------------------------------------------------- Interfaces
@@ -330,6 +474,7 @@ $("#routes").addEventListener("click", async (ev) => {
 const pages = {
   "wan": loadWan,
   "lan": loadLan,
+  "vpn": loadVpn,
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,

@@ -46,16 +46,20 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(lan, "_data", lambda name: tmp_path / "data" / name)
     monkeypatch.setattr(wan, "state_file", lambda: tmp_path / "data" / "wan.json")
     monkeypatch.setattr(wan, "resolv_file", lambda: tmp_path / "data" / "resolv.wan")
+    from app.services import vpn
+    monkeypatch.setattr(vpn, "store", store)
+    monkeypatch.setattr(vpn, "_data", lambda name: tmp_path / "data" / name)
     for name in ("link_names", "link_info", "link_set_up", "kernel_ipv4_addresses", "kernel_ipv4_routes",
                  "addr_add", "addr_del", "bridge_create", "link_delete", "link_set_master"):
         monkeypatch.setattr(netlink, name, getattr(kernel, name))
     calls = {"fw": [], "dnsmasq": 0}
-    monkeypatch.setattr(firewall, "apply", lambda w, l, m: calls["fw"].append((w, l, m)))
+    monkeypatch.setattr(firewall, "apply", lambda w, l, m, vpn=None: calls["fw"].append((w, l, m)))
     monkeypatch.setattr(firewall, "remove", lambda: None)
     def fake_start(cfg):
         calls["dnsmasq"] += 1
         lan._data("dnsmasq.conf").parent.mkdir(parents=True, exist_ok=True)
         lan._data("dnsmasq.conf").write_text(lan.dnsmasq_conf(cfg, "leases", "resolv"))
+        lan.write_hosts_file()
     monkeypatch.setattr(lan, "start_dnsmasq", fake_start)
     (tmp_path / "data").mkdir()
     return store, kernel, calls
@@ -103,7 +107,8 @@ def test_explicit_ports(env):
 
 
 def test_dnsmasq_conf():
-    conf = lan.dnsmasq_conf(LanConfig(enabled=True, lease_time="1d"), "/d/leases", "/d/resolv.wan")
+    conf = lan.dnsmasq_conf(LanConfig(enabled=True, lease_time="1d"), "/d/leases", "/d/resolv.wan", "/d/hosts")
+    assert "dhcp-hostsfile=/d/hosts" in conf
     assert "interface=br-lan" in conf and "bind-dynamic" in conf
     assert "dhcp-range=192.168.88.10,192.168.88.254,255.255.255.0,1d" in conf
     assert "dhcp-option=option:router,192.168.88.1" in conf
@@ -149,3 +154,40 @@ def test_leases_and_vendor(env, tmp_path, monkeypatch):
     assert rows[1].hostname == "GXP1625" and rows[1].vendor == "Grandstream Networks, Inc."
     assert rows[0].hostname is None and "случайный" in rows[0].vendor
     oui._table.cache_clear()
+
+
+def test_static_leases(env):
+    store, _, _ = env
+    from app.models.lan import StaticLease
+    lan.update(LanConfig(enabled=True))
+    view = lan.add_static(StaticLease(mac="00-0B-82-AA-BB-CC", ip="192.168.88.5", name="GXP1625"))
+    assert view[0].mac == "00:0b:82:aa:bb:cc" and not view[0].in_pool and view[0].valid
+    lan.add_static(StaticLease(mac="00:0b:82:00:00:01", ip="192.168.88.50", name="Телефон бухгалтера"))
+    hosts = lan._data("dnsmasq.hosts").read_text()
+    assert "00:0b:82:aa:bb:cc,192.168.88.5,GXP1625" in hosts
+    assert "00:0b:82:00:00:01,192.168.88.50\n" in hosts           # кириллица — не hostname
+    assert lan.static_view()[1].in_pool
+
+    for bad, code in ((StaticLease(mac="00:0b:82:aa:bb:cc", ip="192.168.88.6"), 409),
+                      (StaticLease(mac="00:0b:82:00:00:02", ip="192.168.88.5"), 409),
+                      (StaticLease(mac="00:0b:82:00:00:03", ip="10.0.0.5"), 400),
+                      (StaticLease(mac="00:0b:82:00:00:04", ip="192.168.88.1"), 400)):
+        with pytest.raises(lan.LanError) as e:
+            lan.add_static(bad)
+        assert e.value.status == code
+
+    lan.update(LanConfig(enabled=True, lease_time="1d"))           # смена LAN не теряет закреплённые
+    assert len(store.load()["lan"]["dhcp-server"]["static-leases"]) == 2
+    lan.update_static("00:0b:82:aa:bb:cc", StaticLease(mac="00:0b:82:aa:bb:cc", ip="192.168.88.6"))
+    assert lan.delete_static("00:0B:82:00:00:01")[0].ip == "192.168.88.6"
+    with pytest.raises(lan.LanError):
+        lan.delete_static("00:0b:82:00:00:01")
+
+
+def test_leases_mark_static(env, tmp_path):
+    from app.models.lan import StaticLease
+    lan.update(LanConfig(enabled=True))
+    lan.add_static(StaticLease(mac="00:0b:82:aa:bb:cc", ip="192.168.88.5", name="Телефон"))
+    (tmp_path / "data" / "dnsmasq.leases").write_text("0 00:0b:82:aa:bb:cc 192.168.88.5 gxp *\n")
+    row = lan.leases()[0]
+    assert row.static and row.name == "Телефон" and row.expires is None

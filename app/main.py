@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.agent import apply as agent
-from app.api.routes import interfaces, ip_addresses, ip_routes, lan, system, wan
+from app.api.routes import interfaces, ip_addresses, ip_routes, lan, system, vpn, wan
 from app.core.config import settings
 from app.services import lan as lan_svc
 from app.services import wan as wan_svc
@@ -42,7 +42,7 @@ async def no_stale_web(request: Request, call_next):
 app.include_router(system.router, prefix="/api/system", tags=["System"])
 app.include_router(wan.router, prefix="/api/wan", tags=["WAN"])
 app.include_router(lan.router, prefix="/api/lan", tags=["LAN"])
-# Следующий: vpn
+app.include_router(vpn.router, prefix="/api/vpn", tags=["VPN"])
 
 # API: Advanced (двигатель под WAN / LAN / VPN)
 app.include_router(interfaces.router, prefix="/api/interfaces", tags=["Advanced / Interfaces"])

@@ -61,3 +61,12 @@ table.compact th, table.compact td { padding: 6px 10px; }
 .badge.wan { background: #fdecc8; color: #8a5300; }
 .badge.lan { background: #dcefe0; color: #1a7f37; }
 .card h2 + .status-grid { margin-top: 0; }
+
+/* --- VPN --- */
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid #d6dbe1; max-width: 760px; }
+.tab { padding: 8px 16px; font-size: 14px; color: #3d5166; border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0; }
+.tab.active { background: #fff; border-color: #d6dbe1; margin-bottom: -1px; font-weight: 600; }
+.tab.disabled { opacity: .45; }
+.status-grid .full { grid-column: 1 / -1; }
+.status-grid code { font-size: 12px; word-break: break-all; }
+textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; border: 1px solid #c8ced6; border-radius: 4px; }

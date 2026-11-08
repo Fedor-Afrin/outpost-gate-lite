@@ -47,6 +47,25 @@ def link_set_up(ifname: str) -> None:
         ipr.link("set", index=_index(ipr, ifname), state="up")
 
 
+def link_set_mtu(ifname: str, mtu: int) -> None:
+    with _ipr() as ipr:
+        ipr.link("set", index=_index(ipr, ifname), mtu=mtu)
+
+
+def wireguard_create(name: str) -> None:
+    """ip link add <name> type wireguard (модуль ядра хоста)."""
+    from pyroute2 import NetlinkError
+    with _ipr() as ipr:
+        if ipr.link_lookup(ifname=name):
+            return
+        try:
+            ipr.link("add", ifname=name, kind="wireguard")
+        except NetlinkError as e:
+            raise NetlinkOpError(
+                f"не удалось создать {name}: модуль ядра wireguard недоступен "
+                f"(на хосте выполните: sudo modprobe wireguard) — {e}") from e
+
+
 # --- мост (bridge) --------------------------------------------------------------
 def bridge_create(name: str, mac: str | None = None) -> None:
     """ip link add <name> type bridge (без STP и задержки — порты работают сразу)."""

@@ -94,14 +94,37 @@ def system_nameservers() -> list[str]:
 
 
 def write_upstream_dns(dns: list[str]) -> None:
-    """dnsmasq сам следит за этим файлом и подхватывает изменения без перезапуска."""
-    servers = dns or system_nameservers() or ["1.1.1.1", "8.8.8.8"]
+    """dnsmasq сам следит за этим файлом и подхватывает изменения без перезапуска.
+
+    Если поднят VPN в режиме «весь трафик» и у него есть DNS — они важнее DNS провайдера
+    (иначе DNS-запросы утекали бы мимо туннеля).
+    """
+    from app.services import vpn   # здесь, чтобы не было циклического импорта
+    servers = vpn.dns_override() or dns or system_nameservers() or ["1.1.1.1", "8.8.8.8"]
     path = resolv_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".resolv.")
     with os.fdopen(fd, "w") as f:
         f.write("".join(f"nameserver {s}\n" for s in servers))
     os.replace(tmp, path)
+
+
+def refresh_upstream_dns() -> None:
+    write_upstream_dns(get_config().dns or load_state().get("dns", []))
+
+
+def current_gateway() -> str | None:
+    """Шлюз провайдера: маршрут по умолчанию через WAN с наименьшей метрикой."""
+    ifname = load_state().get("interface")
+    if not ifname:
+        try:
+            ifname = resolve_interface(get_config())
+        except WanError:
+            return None
+    defaults = sorted((r for r in netlink.kernel_ipv4_routes()
+                       if r["dst"] == "0.0.0.0/0" and r["interface"] == ifname and r["gateway"]),
+                      key=lambda r: r["metric"])
+    return defaults[0]["gateway"] if defaults else None
 
 
 # --- интерфейс ------------------------------------------------------------------
@@ -221,8 +244,9 @@ def update(new: WanConfig) -> WanStatus:
         raise WanError(400, str(e)) from e
     with store.transaction() as cfg:
         cfg["wan"] = new.to_yaml()
-    from app.services import lan          # LAN зависит от WAN: NAT, фаервол, состав портов
+    from app.services import lan, vpn     # LAN и VPN зависят от WAN: NAT, фаервол, маршрут до сервера
     lan.on_wan_changed()
+    vpn.on_wan_changed()
     return status()
 
 

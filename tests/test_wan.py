@@ -62,8 +62,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(wan, "store", store)
     monkeypatch.setattr(wan, "state_file", lambda: tmp_path / "data" / "wan.json")
     monkeypatch.setattr(wan, "resolv_file", lambda: tmp_path / "data" / "resolv.wan")
-    from app.services import lan
+    from app.services import lan, vpn
     monkeypatch.setattr(lan, "on_wan_changed", lambda: None)
+    monkeypatch.setattr(vpn, "on_wan_changed", lambda: None)
+    monkeypatch.setattr(vpn, "refresh_endpoint_route", lambda: None)
+    monkeypatch.setattr(vpn, "dns_override", lambda: [])
     for name in ("link_names", "link_info", "link_set_up", "kernel_ipv4_addresses",
                  "kernel_ipv4_routes", "addr_add", "addr_del", "route_add", "route_del"):
         monkeypatch.setattr(netlink, name, getattr(kernel, name))

@@ -4,7 +4,7 @@ FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         iproute2 nftables iputils-ping traceroute tcpdump procps busybox \
-        dnsmasq-base ieee-data \
+        dnsmasq-base ieee-data wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/ubuntu-router
