@@ -104,6 +104,8 @@ class Lease(BaseModel):
     hostname: str | None = None
     vendor: str | None = None
     expires: float | None = None   # unix time; None — бессрочно
+    static: bool = False           # адрес закреплён за этим MAC
+    name: str | None = None        # имя из закреплённых адресов
 
 
 class LanStatus(BaseModel):
@@ -114,3 +116,53 @@ class LanStatus(BaseModel):
     ports: list[Port] = []
     dns_dhcp_running: bool = False
     leases: list[Lease] = []
+    static_leases: list["StaticLeaseView"] = []
+
+
+MAC_RE = re.compile(r"^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$")
+HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$")
+
+
+class StaticLease(BaseModel):
+    """Закреплённый адрес: устройство с этим MAC всегда получает этот IP (dhcp-host)."""
+    mac: str = Field(examples=["00:0b:82:aa:bb:cc"])
+    ip: str = Field(examples=["192.168.88.20"])
+    name: str | None = Field(None, max_length=64, examples=["Телефон бухгалтера"])
+
+    @field_validator("mac")
+    @classmethod
+    def _mac(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not MAC_RE.match(v):
+            raise ValueError(f"неверный MAC '{v}': ожидается 00:0b:82:aa:bb:cc")
+        return v.replace("-", ":")
+
+    @field_validator("ip")
+    @classmethod
+    def _ip(cls, v: str) -> str:
+        try:
+            ip = ipaddress.ip_address(v.strip())
+        except ValueError as e:
+            raise ValueError(f"неверный IP '{v}'") from e
+        if ip.version != 4:
+            raise ValueError("нужен IPv4")
+        return str(ip)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        return v.strip() or None if v else None
+
+    def dnsmasq_line(self) -> str:
+        """Имя передаём в dnsmasq, только если оно годится как hostname (латиница, цифры, -)."""
+        if self.name and HOSTNAME_RE.match(self.name):
+            return f"{self.mac},{self.ip},{self.name}"
+        return f"{self.mac},{self.ip}"
+
+
+class StaticLeaseView(StaticLease):
+    in_pool: bool = False      # адрес внутри динамического диапазона (работает, но лучше вне пула)
+    valid: bool = True         # адрес в сети LAN и не совпадает с адресом роутера
+
+
+LanStatus.model_rebuild()

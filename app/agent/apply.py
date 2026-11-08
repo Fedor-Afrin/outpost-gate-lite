@@ -6,11 +6,12 @@ router.yaml — единый источник правды (аналог /export
   1. ip_forward
   2. WAN (адрес/шлюз или запуск DHCP-клиента)
   3. LAN (мост br-lan, dnsmasq, NAT и фаервол)
-  4. адреса из Advanced → IP Addresses
-  5. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
-Дальше: VPN, Safe Mode.
+  4. VPN (WireGuard: туннель, маршруты, kill switch)
+  5. адреса из Advanced → IP Addresses
+  6. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
+Дальше: AmneziaWG, L2TP, Safe Mode.
 """
-from app.services import addresses, lan, routes, sysctl, wan
+from app.services import addresses, lan, routes, sysctl, vpn, wan
 
 
 def _step(name: str, fn) -> None:
@@ -29,5 +30,6 @@ def apply_startup() -> None:
 
     _step("WAN", wan.apply_startup)
     _step("LAN", lan.apply_startup)
+    _step("VPN", vpn.apply_startup)
     _step("адреса", addresses.apply_all)
     _step("маршруты", routes.apply_all)

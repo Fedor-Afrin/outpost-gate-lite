@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.3.0">
+  <link rel="stylesheet" href="css/style.css?v=0.4.0">
 </head>
 <body>
   <aside>
@@ -12,7 +12,7 @@
       <a class="disabled">Status</a>
       <a href="#wan" data-page="wan">WAN</a>
       <a href="#lan" data-page="lan">LAN</a>
-      <a class="disabled">VPN</a>
+      <a href="#vpn" data-page="vpn">VPN</a>
       <a class="disabled">Firewall</a>
       <a class="disabled">Tools</a>
       <a class="disabled">System</a>
@@ -125,10 +125,94 @@
       <div class="card wide">
         <h2>Устройства (DHCP-аренды)</h2>
         <table class="compact">
-          <thead><tr><th>Имя</th><th>IP</th><th>MAC</th><th>Производитель</th><th>Аренда до</th></tr></thead>
+          <thead><tr><th>Имя</th><th>IP</th><th>MAC</th><th>Производитель</th><th>Аренда до</th><th></th></tr></thead>
           <tbody id="lan-leases"></tbody>
         </table>
       </div>
+
+      <div class="card wide" id="static-card">
+        <h2>Закреплённые адреса</h2>
+        <p class="hint">Устройство с этим MAC всегда получает этот IP. Удобнее закреплять адреса вне пула DHCP.
+          Быстрее всего — кнопкой «Закрепить» в списке устройств.</p>
+        <form id="static-form" class="toolbar">
+          <input name="mac" placeholder="MAC: 00:0b:82:aa:bb:cc" required>
+          <input name="ip" placeholder="IP: 192.168.88.20" required>
+          <input name="name" placeholder="Имя: Телефон бухгалтера">
+          <button type="submit">+ Закрепить</button>
+          <span id="static-error" class="error"></span>
+        </form>
+        <table class="compact">
+          <thead><tr><th>Имя</th><th>IP</th><th>MAC</th><th>Примечание</th><th></th></tr></thead>
+          <tbody id="static-leases"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- VPN -->
+    <section id="page-vpn" class="page">
+      <h1>VPN</h1>
+      <div class="tabs">
+        <a class="tab active">WireGuard</a>
+        <a class="tab disabled" title="следующий шаг">AmneziaWG</a>
+        <a class="tab disabled" title="позже">L2TP</a>
+      </div>
+
+      <div class="card">
+        <div class="status-grid">
+          <div><span class="label">Состояние</span><span id="vs-state">—</span></div>
+          <div><span class="label">Handshake</span><span id="vs-hs">—</span></div>
+          <div><span class="label">Сервер</span><span id="vs-endpoint">—</span></div>
+          <div><span class="label">Трафик</span><span id="vs-traffic">—</span></div>
+          <div class="full"><span class="label">Ключ роутера</span><code id="vs-pub">—</code></div>
+        </div>
+        <span id="vs-error" class="error"></span>
+      </div>
+
+      <div class="card">
+        <h2>Импорт конфига</h2>
+        <p class="hint">Вставьте содержимое .conf от администратора сервера или выберите файл — поля ниже заполнятся сами.</p>
+        <textarea id="wg-import" rows="6" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0"></textarea>
+        <div class="toolbar">
+          <input type="file" id="wg-file" accept=".conf,text/plain">
+          <button type="button" id="wg-parse">Разобрать</button>
+          <span id="wg-parse-msg" class="ok"></span>
+        </div>
+      </div>
+
+      <form id="wg-form" class="card form">
+        <h2>Настройки</h2>
+        <label class="check"><input type="checkbox" name="enabled"> Включить туннель</label>
+
+        <fieldset class="modes">
+          <label><input type="radio" name="mode" value="full"> Весь трафик через VPN</label>
+          <label><input type="radio" name="mode" value="split"> Только сети компании (split tunnel)</label>
+        </fieldset>
+        <label class="check"><input type="checkbox" name="killswitch"> Kill switch: туннель упал — устройства LAN без интернета</label>
+        <label class="check"><input type="checkbox" name="nat"> NAT в туннель (сервер не знает сеть LAN)</label>
+        <p class="hint">NAT нужен для обычного VPN-сервера, где у клиента один адрес. Выключите для site-to-site:
+          тогда центр видит реальные адреса устройств LAN и может к ним подключаться (телефоны, удалённая помощь).</p>
+
+        <h2>Интерфейс (роутер)</h2>
+        <label class="row">PrivateKey <input name="private_key" type="password" autocomplete="off"></label>
+        <div class="toolbar"><button type="button" id="wg-genkey">Сгенерировать ключи</button>
+          <span class="hint">публичный ключ роутера отдайте администратору сервера</span></div>
+        <label class="row">Address <input name="addresses" placeholder="10.8.0.2/32"></label>
+        <label class="row">DNS <input name="dns" placeholder="10.8.0.1"></label>
+        <label class="row">MTU <input name="mtu" type="number" min="1280" max="1500"></label>
+
+        <h2>Сервер (Peer)</h2>
+        <label class="row">PublicKey <input name="peer_public_key"></label>
+        <label class="row">PresharedKey <input name="preshared_key" type="password" autocomplete="off"></label>
+        <label class="row">Endpoint <input name="endpoint" placeholder="vpn.example.com:51820"></label>
+        <label class="row">AllowedIPs (сети компании) <input name="allowed_ips" placeholder="10.0.0.0/8, 192.168.10.0/24"></label>
+        <label class="row">PersistentKeepalive, с <input name="keepalive" type="number" min="0" max="3600"></label>
+
+        <div class="toolbar">
+          <button type="submit">Применить</button>
+          <span id="wg-error" class="error"></span>
+          <span id="wg-ok" class="ok"></span>
+        </div>
+      </form>
     </section>
 
     <!-- Interfaces -->
@@ -187,6 +271,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.3.0"></script>
+  <script src="js/app.js?v=0.4.0"></script>
 </body>
 </html>
