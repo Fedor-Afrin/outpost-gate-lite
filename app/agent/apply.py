@@ -2,15 +2,21 @@
 Агент применения конфигурации.
 
 router.yaml — единый источник правды (аналог /export в RouterOS).
-При старте контейнера агент приводит систему к конфигу:
-  - ip_forward                       готово
-  - адреса на интерфейсах            готово (этап 1)
-  - маршруты                         готово (этап 1)
-  - DHCP-клиент / сервер, DNS        этап 1 (dnsmasq)
-  - nftables: filter + NAT           этап 2 (nft -f, атомарно)
-  - Safe Mode                        этап System
+При старте API агент приводит систему к конфигу, строго по порядку:
+  1. ip_forward
+  2. WAN (адрес/шлюз или запуск DHCP-клиента)
+  3. адреса из Advanced → IP Addresses
+  4. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
+Дальше: LAN (мост + dnsmasq), VPN, nftables, Safe Mode.
 """
-from app.services import addresses, routes, sysctl
+from app.services import addresses, routes, sysctl, wan
+
+
+def _step(name: str, fn) -> None:
+    try:
+        fn()
+    except Exception as e:  # агент не должен мешать запуску API
+        print(f"[agent] ERROR: {name}: {e}")
 
 
 def apply_startup() -> None:
@@ -20,16 +26,6 @@ def apply_startup() -> None:
         print("[agent] WARNING: не удалось включить ip_forward "
               "(нужен NET_ADMIN / --sysctl net.ipv4.ip_forward=1)")
 
-    try:
-        addresses.apply_all()
-    except Exception as e:  # агент не должен мешать запуску API
-        print(f"[agent] ERROR: применение адресов: {e}")
-
-    try:  # маршруты — строго после адресов: шлюз должен быть в подключённой сети
-        routes.apply_all()
-    except Exception as e:
-        print(f"[agent] ERROR: применение маршрутов: {e}")
-
-
-if __name__ == "__main__":
-    apply_startup()
+    _step("WAN", wan.apply_startup)
+    _step("адреса", addresses.apply_all)
+    _step("маршруты", routes.apply_all)

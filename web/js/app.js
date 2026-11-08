@@ -34,6 +34,78 @@ async function loadSystem() {
     `${esc(s.hostname)}<br>kernel ${esc(s.kernel)}<br>mode: ${esc(s.mode)}<br>ip_forward: ${s.ip_forward ? "on" : "off"}`;
 }
 
+// ---------------------------------------------------------------- WAN
+const STATE_TEXT = {
+  bound: "адрес получен по DHCP",
+  searching: "ищу DHCP-сервер…",
+  static: "настроен вручную",
+  none: "не управляется роутером",
+};
+let wanFormLoaded = false;
+
+function wanModeChanged() {
+  const mode = $("#wan-form").querySelector("input[name=mode]:checked")?.value;
+  $("#wan-static").hidden = mode !== "static";
+}
+
+function fillWanForm(w) {
+  const f = $("#wan-form");
+  const c = w.config;
+  const opts = ["auto", ...w.interfaces];
+  if (c.interface !== "auto" && !opts.includes(c.interface)) opts.push(c.interface);
+  $("#wan-iface").innerHTML = opts.map((n) =>
+    `<option value="${esc(n)}" ${n === c.interface ? "selected" : ""}>${n === "auto" ? "auto (по маршруту по умолчанию)" : esc(n)}</option>`).join("");
+  f.querySelector(`input[name=mode][value=${c.mode}]`).checked = true;
+  f.address.value = c.address ?? "";
+  f.gateway.value = c.gateway ?? "";
+  f.dns1.value = c.dns[0] ?? "";
+  f.dns2.value = c.dns[1] ?? "";
+  wanModeChanged();
+}
+
+async function loadWan() {
+  const w = await api("GET", "/api/wan");
+  $("#ws-iface").textContent = w.interface ?? "не найден";
+  $("#ws-link").innerHTML = w.link_up ? '<span class="flag-r">есть</span>' : '<span class="flag-x">нет кабеля</span>';
+  $("#ws-state").textContent = STATE_TEXT[w.dhcp_state] ?? (w.dhcp_state || "—");
+  $("#ws-addr").innerHTML = w.addresses.length ? w.addresses.map(esc).join("<br>") : "—";
+  $("#ws-gw").textContent = w.gateway ?? "—";
+  $("#ws-dns").textContent = w.dns.length ? w.dns.join(", ") : "—";
+  $("#ws-mac").textContent = w.mac ?? "—";
+  $("#ws-lease").textContent = w.lease_expires ? new Date(w.lease_expires * 1000).toLocaleString() : "—";
+  $("#wan-renew").hidden = !w.dhcp_running;
+  if (!wanFormLoaded) { fillWanForm(w); wanFormLoaded = true; }
+}
+
+$("#wan-form").addEventListener("change", (ev) => { if (ev.target.name === "mode") wanModeChanged(); });
+
+$("#wan-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const mode = f.get("mode");
+  $("#wan-error").textContent = "";
+  $("#wan-ok").textContent = "";
+  try {
+    const w = await api("PUT", "/api/wan", {
+      interface: f.get("interface"),
+      mode,
+      address: mode === "static" ? f.get("address") || null : null,
+      gateway: mode === "static" ? f.get("gateway") || null : null,
+      dns: [f.get("dns1"), f.get("dns2")].filter(Boolean),
+    });
+    fillWanForm(w);
+    $("#wan-ok").textContent = "Применено";
+    await loadWan();
+  } catch (e) {
+    $("#wan-error").textContent = e.message;
+  }
+});
+
+$("#wan-renew").addEventListener("click", async () => {
+  try { await api("POST", "/api/wan/renew"); await loadWan(); }
+  catch (e) { $("#wan-error").textContent = e.message; }
+});
+
 // ---------------------------------------------------------------- Interfaces
 let interfacesCache = [];
 
@@ -180,6 +252,7 @@ $("#routes").addEventListener("click", async (ev) => {
 
 // ---------------------------------------------------------------- навигация
 const pages = {
+  "wan": loadWan,
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,
@@ -187,13 +260,13 @@ const pages = {
 let timer = null;
 
 function show() {
-  const page = pages[location.hash.slice(1)] ? location.hash.slice(1) : "interfaces";
+  const page = pages[location.hash.slice(1)] ? location.hash.slice(1) : "wan";
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   document.querySelectorAll("nav a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
   clearInterval(timer);
   const load = () => pages[page]().catch((e) => console.error(e));
   load();
-  timer = setInterval(load, page === "interfaces" ? 3000 : 5000);
+  timer = setInterval(load, page === "ip-addresses" || page === "ip-routes" ? 5000 : 3000);
 }
 
 window.addEventListener("hashchange", show);

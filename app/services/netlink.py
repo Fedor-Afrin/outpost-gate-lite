@@ -31,6 +31,22 @@ def _index(ipr, ifname: str) -> int:
     return idx[0]
 
 
+def link_info(ifname: str) -> dict:
+    """{'mac': ..., 'link_up': bool} или {} если интерфейса нет."""
+    with _ipr() as ipr:
+        idx = ipr.link_lookup(ifname=ifname)
+        if not idx:
+            return {}
+        link = ipr.get_links(idx[0])[0]
+        return {"mac": link.get_attr("IFLA_ADDRESS"), "link_up": bool(link["flags"] & 0x40)}
+
+
+def link_set_up(ifname: str) -> None:
+    """ip link set <ifname> up"""
+    with _ipr() as ipr:
+        ipr.link("set", index=_index(ipr, ifname), state="up")
+
+
 def kernel_ipv4_addresses() -> list[tuple[str, str]]:
     """[(ifname, '192.168.88.1/24'), ...] — IPv4-адреса, реально назначенные в ядре."""
     with _ipr() as ipr:
@@ -78,6 +94,7 @@ RTN_UNICAST = 1
 RT_SCOPE_LINK = 253
 RTPROT_KERNEL = 2   # connected — ядро создаёт само при назначении адреса
 RTPROT_STATIC = 4   # наши статические маршруты помечаем этим proto
+RTPROT_DHCP = 16    # маршрут по умолчанию, полученный DHCP-клиентом WAN
 
 
 def kernel_ipv4_routes() -> list[dict]:
@@ -125,13 +142,14 @@ def _route_present(dst, gateway, ifname, metric) -> bool:
     return False
 
 
-def route_add(dst: str, gateway: str | None = None, ifname: str | None = None, metric: int = 1) -> None:
+def route_add(dst: str, gateway: str | None = None, ifname: str | None = None, metric: int = 1,
+              proto: int = RTPROT_STATIC) -> None:
     from pyroute2 import NetlinkError
     via = gateway or ifname
     with _ipr() as ipr:
         kw = _route_kwargs(ipr, dst, gateway, ifname, metric)
         try:
-            ipr.route("add", proto=RTPROT_STATIC, **kw)
+            ipr.route("add", proto=proto, **kw)
         except NetlinkError as e:
             if e.code == errno.EEXIST:
                 if _route_present(dst, gateway, ifname, metric):

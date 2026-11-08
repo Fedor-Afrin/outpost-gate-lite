@@ -1,8 +1,9 @@
 # Ubuntu Router
 
-Роутер на Ubuntu с управлением через **FastAPI** и веб-интерфейсом.
-Идеология — **MikroTik RouterOS**: разделы Interfaces / IP / Firewall / Tools / System,
-конфиг как единый источник правды, Safe Mode.
+**VPN-шлюз для удалённого сотрудника** на Ubuntu: один WAN в интернет, LAN-порты для
+телефона и компьютера, туннель в корпоративную сеть (WireGuard / AmneziaWG / L2TP).
+Управление через **FastAPI**, веб-интерфейс и CLI в стиле **MikroTik RouterOS**;
+конфиг как единый источник правды, Safe Mode, встроенные инструменты диагностики.
 
 ## Архитектура
 - **Data plane** — ядро Linux хоста: маршрутизация, nftables, NAT.
@@ -23,9 +24,9 @@ docker compose up --build
 - Swagger: http://localhost:8000/docs
 
 ## Дорожная карта
-- [x] Каркас, список интерфейсов
-- [x] IP-адреса, маршруты
-- [ ] Firewall + NAT (nftables)
-- [ ] DHCP-сервер
-- [ ] Safe Mode, export/import конфига
-- [ ] VLAN, Bridge, WireGuard, мониторинг трафика
+- [x] Каркас
+- [x] Advanced: IP Addresses, IP Routes (двигатель)
+- [x] WAN: DHCP-клиент / статика, автоопределение интерфейса
+- [ ] LAN: мост br-lan, dnsmasq (DHCP + DNS), NAT
+- [ ] VPN: WireGuard, AmneziaWG, L2TP/IPsec
+- [ ] Status, Firewall, Tools, System, CLI
