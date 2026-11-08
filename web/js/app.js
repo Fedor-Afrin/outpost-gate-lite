@@ -106,6 +106,82 @@ $("#wan-renew").addEventListener("click", async () => {
   catch (e) { $("#wan-error").textContent = e.message; }
 });
 
+// ---------------------------------------------------------------- LAN
+const ROLE = { wan: '<span class="badge wan">WAN</span>', lan: '<span class="badge lan">LAN</span>', none: "—" };
+let lanFormLoaded = false;
+
+function lanPortsAutoChanged() {
+  const auto = $("#lan-form").ports_auto.checked;
+  $("#lan-port-list").querySelectorAll("input").forEach((i) => { i.disabled = auto; });
+}
+
+function fillLanForm(l) {
+  const f = $("#lan-form");
+  const c = l.config;
+  f.enabled.checked = c.enabled;
+  f.address.value = c.address;
+  f.ports_auto.checked = c.ports.length === 0;
+  const candidates = l.ports.filter((p) => p.role !== "wan");
+  $("#lan-port-list").innerHTML = candidates.map((p) => `
+    <label class="check"><input type="checkbox" name="port" value="${esc(p.name)}"
+      ${c.ports.length === 0 || c.ports.includes(p.name) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")
+    || '<span class="hint">нет свободных портов</span>';
+  f.dhcp_enabled.checked = c.dhcp_enabled;
+  f.pool_start.value = c.pool_start ?? "";
+  f.pool_end.value = c.pool_end ?? "";
+  f.lease_time.value = c.lease_time;
+  if (!f.lease_time.value) f.lease_time.add(new Option(c.lease_time, c.lease_time, true, true));
+  f.wan_management.checked = c.wan_management;
+  lanPortsAutoChanged();
+}
+
+async function loadLan() {
+  const l = await api("GET", "/api/lan");
+  $("#ls-state").innerHTML = l.active ? '<span class="flag-r">работает</span>'
+    : (l.config.enabled ? '<span class="flag-x">ошибка — см. docker logs</span>' : "выключен");
+  $("#ls-dns").textContent = l.dns_dhcp_running ? "dnsmasq работает" : "не запущен";
+  $("#ls-bridge").textContent = l.active ? l.bridge : "—";
+  $("#ls-addr").textContent = l.active ? l.config.address : "—";
+  $("#lan-ports").innerHTML = l.ports.map((p) => `
+    <tr><td>${esc(p.name)}</td><td>${ROLE[p.role]}</td>
+        <td>${p.link_up ? '<span class="flag-r">есть</span>' : '<span class="flag-x">нет</span>'}</td>
+        <td>${esc(p.mac)}</td></tr>`).join("");
+  $("#lan-leases").innerHTML = l.leases.map((d) => `
+    <tr><td>${esc(d.hostname ?? "—")}</td><td>${esc(d.ip)}</td><td>${esc(d.mac)}</td>
+        <td>${esc(d.vendor ?? "—")}</td>
+        <td>${d.expires ? new Date(d.expires * 1000).toLocaleString() : "бессрочно"}</td></tr>`).join("")
+    || '<tr><td colspan="5" class="hint">пока никого</td></tr>';
+  if (!lanFormLoaded) { fillLanForm(l); lanFormLoaded = true; }
+}
+
+$("#lan-form").addEventListener("change", (ev) => { if (ev.target.name === "ports_auto") lanPortsAutoChanged(); });
+
+$("#lan-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#lan-error").textContent = "";
+  $("#lan-ok").textContent = "";
+  const ports = f.ports_auto.checked ? []
+    : [...f.querySelectorAll("input[name=port]:checked")].map((i) => i.value);
+  try {
+    const l = await api("PUT", "/api/lan", {
+      enabled: f.enabled.checked,
+      address: f.address.value,
+      ports,
+      dhcp_enabled: f.dhcp_enabled.checked,
+      pool_start: f.pool_start.value || null,
+      pool_end: f.pool_end.value || null,
+      lease_time: f.lease_time.value,
+      wan_management: f.wan_management.checked,
+    });
+    fillLanForm(l);
+    $("#lan-ok").textContent = "Применено";
+    await loadLan();
+  } catch (e) {
+    $("#lan-error").textContent = e.message;
+  }
+});
+
 // ---------------------------------------------------------------- Interfaces
 let interfacesCache = [];
 
@@ -253,6 +329,7 @@ $("#routes").addEventListener("click", async (ev) => {
 // ---------------------------------------------------------------- навигация
 const pages = {
   "wan": loadWan,
+  "lan": loadLan,
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,

@@ -27,6 +27,6 @@ docker compose up --build
 - [x] Каркас
 - [x] Advanced: IP Addresses, IP Routes (двигатель)
 - [x] WAN: DHCP-клиент / статика, автоопределение интерфейса
-- [ ] LAN: мост br-lan, dnsmasq (DHCP + DNS), NAT
+- [x] LAN: мост br-lan, dnsmasq (DHCP + DNS), NAT, базовый фаервол
 - [ ] VPN: WireGuard, AmneziaWG, L2TP/IPsec
 - [ ] Status, Firewall, Tools, System, CLI

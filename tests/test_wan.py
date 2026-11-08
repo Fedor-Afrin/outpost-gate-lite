@@ -61,6 +61,9 @@ def env(tmp_path, monkeypatch):
     kernel = FakeKernel()
     monkeypatch.setattr(wan, "store", store)
     monkeypatch.setattr(wan, "state_file", lambda: tmp_path / "data" / "wan.json")
+    monkeypatch.setattr(wan, "resolv_file", lambda: tmp_path / "data" / "resolv.wan")
+    from app.services import lan
+    monkeypatch.setattr(lan, "on_wan_changed", lambda: None)
     for name in ("link_names", "link_info", "link_set_up", "kernel_ipv4_addresses",
                  "kernel_ipv4_routes", "addr_add", "addr_del", "route_add", "route_del"):
         monkeypatch.setattr(netlink, name, getattr(kernel, name))
@@ -126,6 +129,7 @@ def test_hook_bound_and_deconfig(env):
     assert any(r["gateway"] == "192.168.122.1" and r["proto"] == netlink.RTPROT_DHCP for r in kernel.routes)
     st = wan.load_state()
     assert st["state"] == "bound" and st["dns"] == ["192.168.122.1", "8.8.8.8"]
+    assert "nameserver 192.168.122.1" in wan.resolv_file().read_text()   # для dnsmasq
 
     wan_hook.handle("renew", {**lease, "ip": "192.168.122.77"})          # адрес сменился
     assert ("eth0", "192.168.122.50/24") not in kernel.addrs
