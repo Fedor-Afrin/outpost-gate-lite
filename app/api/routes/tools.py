@@ -15,6 +15,7 @@ import contextlib
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from app.core import auth
 from app.services import netlink, tools
 
 router = APIRouter()
@@ -52,6 +53,11 @@ def get_capture():
 
 @router.websocket("/ws")
 async def tools_ws(ws: WebSocket):
+    # HTTP-middleware не видит WebSocket — проверяем вход здесь
+    user = auth.user_from_token(auth.token_from(ws.cookies, ws.headers))
+    if not user or user.must_change or user.role != "full":
+        await ws.close(code=4401)
+        return
     await ws.accept()
     try:
         req = await ws.receive_json()

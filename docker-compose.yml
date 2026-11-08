@@ -8,8 +8,10 @@ services:
     build: .
     image: ubuntu-router:dev
     container_name: ubuntu-router-dev
+    restart: unless-stopped   # «Перезапустить сервис» в System: Docker поднимет контейнер сам
     environment:
       ROUTER_MODE: dev
+      # ROUTER_ADMIN_PASSWORD: "свой-пароль"   # иначе случайный — смотрите docker compose logs
     cap_add:
       - NET_ADMIN        # действует только внутри своего namespace
       - NET_RAW

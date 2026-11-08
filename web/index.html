@@ -3,11 +3,39 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.7.0">
+  <link rel="stylesheet" href="css/style.css?v=0.8.0">
 </head>
 <body>
+  <!-- вход -->
+  <div id="login" class="overlay" hidden>
+    <form id="login-form" class="card login-card">
+      <h2>Ubuntu Router</h2>
+      <p class="hint">Войдите, чтобы управлять роутером.</p>
+      <label>Пользователь <input name="name" autocomplete="username" value="admin" required></label>
+      <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Войти</button>
+      <span id="login-error" class="error"></span>
+      <p class="hint small">Первый запуск: пароль admin — в <code>docker compose logs router</code>.</p>
+    </form>
+  </div>
+
+  <!-- обязательная смена пароля -->
+  <div id="pwchange" class="overlay" hidden>
+    <form id="pwchange-form" class="card login-card">
+      <h2>Смените пароль</h2>
+      <p class="hint">Пароль был выдан автоматически или администратором — задайте свой (не короче 8 символов).</p>
+      <label>Текущий пароль <input name="old" type="password" autocomplete="current-password" required></label>
+      <label>Новый пароль <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Ещё раз <input name="new2" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button type="submit">Сохранить</button>
+      <button type="button" id="pwchange-cancel" class="link">Отмена</button>
+      <span id="pwchange-error" class="error"></span>
+    </form>
+  </div>
+
   <aside>
-    <h2>Ubuntu Router</h2>
+    <h2 id="identity">Ubuntu Router</h2>
+    <button type="button" id="safe-btn" class="safe-btn" title="Safe Mode: откат, если связь с роутером пропадёт">Safe Mode</button>
     <nav>
       <a class="disabled">Status</a>
       <a href="#wan" data-page="wan">WAN</a>
@@ -15,16 +43,23 @@
       <a href="#vpn" data-page="vpn">VPN</a>
       <a href="#firewall" data-page="firewall">Firewall</a>
       <a href="#tools" data-page="tools">Tools</a>
-      <a class="disabled">System</a>
+      <a href="#system" data-page="system">System</a>
       <div class="group">Advanced</div>
       <a href="#interfaces" data-page="interfaces" class="sub">Interfaces</a>
       <a href="#ip-addresses" data-page="ip-addresses" class="sub">IP Addresses</a>
       <a href="#ip-routes" data-page="ip-routes" class="sub">IP Routes</a>
     </nav>
     <p id="sysinfo"></p>
+    <div class="whoami"><span id="whoami"></span> <a href="#" id="logout">Выйти</a></div>
   </aside>
 
   <main>
+    <div id="safe-banner" class="safe-banner" hidden>
+      <b>Safe Mode</b> — <span id="safe-text"></span>
+      <button type="button" id="safe-commit">Подтвердить изменения</button>
+      <button type="button" id="safe-rollback" class="danger">Откатить сейчас</button>
+    </div>
+    <div id="safe-event" class="safe-event" hidden></div>
     <!-- WAN -->
     <section id="page-wan" class="page">
       <h1>WAN</h1>
@@ -424,6 +459,88 @@
       </div>
     </section>
 
+    <!-- System -->
+    <section id="page-system" class="page">
+      <h1>System</h1>
+      <div class="tabs" id="sys-tabs">
+        <a class="tab" data-tab="overview">Обзор</a>
+        <a class="tab" data-tab="users">Пользователи</a>
+        <a class="tab" data-tab="backup">Резервные копии</a>
+        <a class="tab" data-tab="audit">Журнал</a>
+      </div>
+
+      <div data-panel="overview">
+        <div class="tiles" id="sys-tiles"></div>
+        <div class="card">
+          <div class="status-grid" id="sys-info"></div>
+        </div>
+        <form id="identity-form" class="card form">
+          <h2>Имя роутера (Identity)</h2>
+          <div class="toolbar"><input name="identity" maxlength="48" required>
+            <button type="submit">Сохранить</button><span id="identity-msg" class="ok"></span></div>
+        </form>
+        <div class="card">
+          <h2>Safe Mode</h2>
+          <p class="hint">Перед рискованными изменениями (фаервол, WAN, VPN) включите Safe Mode: если связь с роутером пропадёт
+            дольше заданного времени, он сам вернёт прежнюю конфигурацию. Кнопка — и в левом меню.</p>
+          <div class="toolbar">Откат, если нет связи <input id="safe-timeout" type="number" min="15" max="900" value="60" class="narrow"> с
+            <button type="button" id="safe-start2">Включить Safe Mode</button></div>
+        </div>
+        <div class="card">
+          <h2>Перезапуск</h2>
+          <p class="hint">Перезапускает сервис роутера (DHCP, VPN и правила применятся заново). Docker поднимет контейнер сам.</p>
+          <button type="button" id="restart-btn" class="danger">Перезапустить сервис</button>
+          <span id="restart-msg" class="hint"></span>
+        </div>
+      </div>
+
+      <div data-panel="users" hidden>
+        <div class="card wide">
+          <table class="compact"><thead><tr><th>Пользователь</th><th>Роль</th><th>Пароль</th><th></th></tr></thead>
+            <tbody id="users"></tbody></table>
+        </div>
+        <form id="user-form" class="card form">
+          <h2>Новый пользователь</h2>
+          <div class="toolbar">
+            <input name="name" placeholder="имя (латиница)" required>
+            <input name="password" type="password" placeholder="временный пароль" minlength="8" required autocomplete="new-password">
+            <select name="role"><option value="full">Полные права</option><option value="read">Только просмотр</option></select>
+            <button type="submit">Добавить</button>
+            <span id="user-error" class="error"></span>
+          </div>
+          <p class="hint">Новый пользователь сменит пароль при первом входе. Свой пароль — кнопка «Сменить пароль» у своей строки.</p>
+        </form>
+      </div>
+
+      <div data-panel="backup" hidden>
+        <div class="card">
+          <h2>Резервная копия</h2>
+          <p class="hint">Весь <code>router.yaml</code> одним файлом. В нём ключи VPN и пароли L2TP — храните копию надёжно.
+            Пользователи веб-интерфейса в копию не входят.</p>
+          <div class="toolbar">
+            <a class="button" href="/api/system/backup">⬇ Скачать копию</a>
+            <input type="file" id="restore-file" accept=".yaml,.yml,text/yaml">
+            <button type="button" id="restore-btn">Восстановить из файла</button>
+            <span id="restore-msg" class="ok"></span><span id="restore-error" class="error"></span>
+          </div>
+        </div>
+        <div class="card wide">
+          <h2>Автоматические снимки</h2>
+          <p class="hint">Перед каждым изменением роутер сохраняет предыдущую версию конфигурации (последние 50).</p>
+          <table class="compact"><thead><tr><th>Время</th><th>Размер</th><th></th></tr></thead>
+            <tbody id="snapshots"></tbody></table>
+        </div>
+      </div>
+
+      <div data-panel="audit" hidden>
+        <div class="card wide">
+          <p class="hint">Кто, когда и что менял: все изменения через веб и API, входы в систему, откаты Safe Mode.</p>
+          <table class="compact"><thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Что</th><th>Результат</th><th>IP</th></tr></thead>
+            <tbody id="audit"></tbody></table>
+        </div>
+      </div>
+    </section>
+
     <!-- Interfaces -->
     <section id="page-interfaces" class="page">
       <h1>Interfaces</h1>
@@ -480,6 +597,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.7.0"></script>
+  <script src="js/app.js?v=0.8.0"></script>
 </body>
 </html>

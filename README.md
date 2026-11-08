@@ -32,4 +32,5 @@ docker compose up --build
 - [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
 - [x] Firewall: правила в стиле OCI Security Lists (входящие, транзит), проброс портов, счётчики, итоговый nftables
 - [x] Tools: ping, TCP ping, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP + порты), захват пакетов с выгрузкой .pcap
-- [ ] Status, System, CLI
+- [x] System: вход по паролю (роли full / read), пользователи, журнал действий, резервные копии и снимки, Safe Mode, ресурсы, перезапуск
+- [ ] Status, CLI
