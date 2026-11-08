@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.agent import apply as agent
-from app.api.routes import firewall, interfaces, ip_addresses, ip_routes, lan, system, vpn, wan
+from app.api.routes import firewall, interfaces, ip_addresses, ip_routes, lan, system, tools, vpn, wan
 from app.core.config import settings
 from app.services import lan as lan_svc
 from app.services import vpn as vpn_svc
@@ -46,6 +46,7 @@ app.include_router(wan.router, prefix="/api/wan", tags=["WAN"])
 app.include_router(lan.router, prefix="/api/lan", tags=["LAN"])
 app.include_router(vpn.router, prefix="/api/vpn", tags=["VPN"])
 app.include_router(firewall.router, prefix="/api/firewall", tags=["Firewall"])
+app.include_router(tools.router, prefix="/api/tools", tags=["Tools"])
 
 # API: Advanced (двигатель под WAN / LAN / VPN)
 app.include_router(interfaces.router, prefix="/api/interfaces", tags=["Advanced / Interfaces"])

@@ -31,4 +31,5 @@ docker compose up --build
 - [x] VPN → WireGuard: импорт .conf, full / split, kill switch, NAT или site-to-site
 - [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
 - [x] Firewall: правила в стиле OCI Security Lists (входящие, транзит), проброс портов, счётчики, итоговый nftables
-- [ ] Status, Tools, System, CLI
+- [x] Tools: ping, TCP ping, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP + порты), захват пакетов с выгрузкой .pcap
+- [ ] Status, System, CLI
