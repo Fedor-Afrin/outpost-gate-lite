@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.4.0">
+  <link rel="stylesheet" href="css/style.css?v=0.5.0">
 </head>
 <body>
   <aside>
@@ -151,12 +151,14 @@
     <!-- VPN -->
     <section id="page-vpn" class="page">
       <h1>VPN</h1>
-      <div class="tabs">
-        <a class="tab active">WireGuard</a>
-        <a class="tab disabled" title="следующий шаг">AmneziaWG</a>
-        <a class="tab disabled" title="позже">L2TP</a>
+      <div class="tabs" id="vpn-tabs">
+        <a class="tab" data-kind="wireguard">WireGuard</a>
+        <a class="tab" data-kind="amneziawg">AmneziaWG</a>
+        <a class="tab" data-kind="l2tp">L2TP/IPsec</a>
       </div>
+      <p class="hint" id="vpn-active-hint">Одновременно работает один туннель: включение одного выключает остальные.</p>
 
+      <div id="wg-panel">
       <div class="card">
         <div class="status-grid">
           <div><span class="label">Состояние</span><span id="vs-state">—</span></div>
@@ -207,12 +209,61 @@
         <label class="row">AllowedIPs (сети компании) <input name="allowed_ips" placeholder="10.0.0.0/8, 192.168.10.0/24"></label>
         <label class="row">PersistentKeepalive, с <input name="keepalive" type="number" min="0" max="3600"></label>
 
+        <div id="awg-obf" hidden>
+          <h2>Обфускация AmneziaWG</h2>
+          <p class="hint">Параметры Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 — по одному «Имя = значение» в строке.
+            Должны совпадать с сервером; при импорте конфига заполняются сами.</p>
+          <textarea name="obfuscation" rows="6" placeholder="Jc = 4&#10;Jmin = 40&#10;Jmax = 70&#10;S1 = 0&#10;S2 = 0&#10;H1 = 1&#10;H2 = 2&#10;H3 = 3&#10;H4 = 4"></textarea>
+        </div>
+
         <div class="toolbar">
           <button type="submit">Применить</button>
           <span id="wg-error" class="error"></span>
           <span id="wg-ok" class="ok"></span>
         </div>
       </form>
+      </div>
+
+      <!-- L2TP/IPsec -->
+      <div id="l2tp-panel" hidden>
+        <div class="card">
+          <div class="status-grid">
+            <div><span class="label">Состояние</span><span id="ls2-state">—</span></div>
+            <div><span class="label">IPsec</span><span id="ls2-ipsec">—</span></div>
+            <div><span class="label">Сервер</span><span id="ls2-server">—</span></div>
+            <div><span class="label">Адрес в туннеле</span><span id="ls2-ip">—</span></div>
+            <div><span class="label">Трафик</span><span id="ls2-traffic">—</span></div>
+          </div>
+          <span id="ls2-error" class="error"></span>
+        </div>
+
+        <form id="l2tp-form" class="card form">
+          <h2>Настройки</h2>
+          <label class="check"><input type="checkbox" name="enabled"> Включить туннель</label>
+          <fieldset class="modes">
+            <label><input type="radio" name="mode" value="full"> Весь трафик через VPN</label>
+            <label><input type="radio" name="mode" value="split"> Только сети компании (split tunnel)</label>
+          </fieldset>
+          <label class="check"><input type="checkbox" name="killswitch"> Kill switch: туннель упал — устройства LAN без интернета</label>
+          <label class="check"><input type="checkbox" name="nat"> NAT в туннель (сервер не знает сеть LAN)</label>
+
+          <h2>Подключение</h2>
+          <label class="row">Сервер <input name="server" placeholder="vpn.example.com"></label>
+          <label class="row">IPsec PSK <input name="psk" type="password" autocomplete="off"></label>
+          <label class="row">Пользователь <input name="username" autocomplete="off"></label>
+          <label class="row">Пароль <input name="password" type="password" autocomplete="off"></label>
+          <label class="row">Сети компании (split) <input name="networks" placeholder="192.168.10.0/24, 10.0.0.0/8"></label>
+          <label class="row">MTU <input name="mtu" type="number" min="1280" max="1460"></label>
+          <p class="hint">L2TP/IPsec (IKEv1, PSK) — для совместимости с серверами MikroTik, Windows, Cisco.
+            Там, где VPN блокируют, используйте AmneziaWG.</p>
+
+          <div class="toolbar">
+            <button type="submit">Применить</button>
+            <span id="l2tp-error" class="error"></span>
+            <span id="l2tp-ok" class="ok"></span>
+          </div>
+        </form>
+      </div>
     </section>
 
     <!-- Interfaces -->
@@ -271,6 +322,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.4.0"></script>
+  <script src="js/app.js?v=0.5.0"></script>
 </body>
 </html>

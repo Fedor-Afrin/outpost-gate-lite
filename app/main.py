@@ -9,6 +9,7 @@ from app.agent import apply as agent
 from app.api.routes import interfaces, ip_addresses, ip_routes, lan, system, vpn, wan
 from app.core.config import settings
 from app.services import lan as lan_svc
+from app.services import vpn as vpn_svc
 from app.services import wan as wan_svc
 
 
@@ -17,6 +18,7 @@ async def lifespan(_: FastAPI):
     # Агент работает внутри процесса API: DHCP-клиентом WAN управляет этот процесс
     agent.apply_startup()
     yield
+    vpn_svc.stop_all()
     lan_svc.stop_dnsmasq()
     wan_svc.stop_dhcp()   # корректно отпустить аренду при остановке
 

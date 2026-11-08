@@ -30,6 +30,7 @@ class VpnRules:
     nat: bool             # masquerade LAN за адресом туннеля
     killswitch: bool      # LAN → WAN напрямую запрещено (весь трафик только в туннель)
     inbound: bool         # из туннеля можно заходить в LAN и на роутер (site-to-site)
+    ipsec_server: str | None = None   # L2TP/IPsec: впустить с WAN IKE, ESP и L2TP от этого сервера
 
 
 def management_ports() -> list[int]:
@@ -44,6 +45,12 @@ def ruleset(wan: str, lan: str, wan_management: bool, vpn: VpnRules | None = Non
 
     if vpn and not vpn.inbound:
         input_vpn = f'{i}iifname "{vpn.iface}" drop            # из туннеля — только ответы\n'
+    ipsec_rules = ""
+    if vpn and vpn.ipsec_server:
+        srv = vpn.ipsec_server
+        ipsec_rules = (f'{i}ip saddr {srv} udp dport {{ 500, 4500 }} accept   # IKE от сервера L2TP/IPsec\n'
+                       f'{i}ip saddr {srv} ip protocol esp accept\n'
+                       f'{i}ip saddr {srv} udp dport 1701 accept           # L2TP (внутри IPsec)\n')
 
     if vpn:
         forward += (f'{i}oifname "{vpn.iface}" tcp flags syn tcp option maxseg size set rt mtu\n'
@@ -75,7 +82,7 @@ table inet {TABLE} {{
 {input_vpn}        iifname != "{wan}" accept            # LAN — без ограничений
         ip protocol icmp accept
         udp sport 67 udp dport 68 accept     # ответы DHCP-сервера провайдера
-{mgmt_rule}        drop                                 # всё остальное с WAN
+{ipsec_rules}{mgmt_rule}        drop                                 # всё остальное с WAN
     }}
 
     chain forward {{

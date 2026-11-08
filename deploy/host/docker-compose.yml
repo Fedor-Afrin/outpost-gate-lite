@@ -14,6 +14,8 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    device_cgroup_rules:
+      - "c 108:0 rwm"    # /dev/ppp для L2TP (на хосте: sudo modprobe ppp_generic)
     environment:
       ROUTER_MODE: host
       API_HOST: 192.168.88.1    # слушать ТОЛЬКО LAN-адрес, не WAN!

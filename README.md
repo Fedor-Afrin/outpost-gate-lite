@@ -29,5 +29,5 @@ docker compose up --build
 - [x] WAN: DHCP-клиент / статика, автоопределение интерфейса
 - [x] LAN: мост br-lan, dnsmasq (DHCP + DNS), закреплённые адреса, NAT, базовый фаервол
 - [x] VPN → WireGuard: импорт .conf, full / split, kill switch, NAT или site-to-site
-- [ ] VPN → AmneziaWG, L2TP/IPsec
+- [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
 - [ ] Status, Firewall, Tools, System, CLI
