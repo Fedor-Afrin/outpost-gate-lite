@@ -53,7 +53,7 @@ def env(tmp_path, monkeypatch):
                  "addr_add", "addr_del", "bridge_create", "link_delete", "link_set_master"):
         monkeypatch.setattr(netlink, name, getattr(kernel, name))
     calls = {"fw": [], "dnsmasq": 0}
-    monkeypatch.setattr(firewall, "apply", lambda w, l, m, vpn=None: calls["fw"].append((w, l, m)))
+    monkeypatch.setattr(firewall, "apply", lambda w, l, m, *rest: calls["fw"].append((w, l, m)))
     monkeypatch.setattr(firewall, "remove", lambda: None)
     def fake_start(cfg):
         calls["dnsmasq"] += 1

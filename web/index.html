@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.5.0">
+  <link rel="stylesheet" href="css/style.css?v=0.6.0">
 </head>
 <body>
   <aside>
@@ -13,7 +13,7 @@
       <a href="#wan" data-page="wan">WAN</a>
       <a href="#lan" data-page="lan">LAN</a>
       <a href="#vpn" data-page="vpn">VPN</a>
-      <a class="disabled">Firewall</a>
+      <a href="#firewall" data-page="firewall">Firewall</a>
       <a class="disabled">Tools</a>
       <a class="disabled">System</a>
       <div class="group">Advanced</div>
@@ -266,6 +266,116 @@
       </div>
     </section>
 
+    <!-- Firewall -->
+    <section id="page-firewall" class="page">
+      <h1>Firewall</h1>
+      <p id="fw-zones" class="zones"></p>
+      <div class="tabs" id="fw-tabs">
+        <a class="tab" data-tab="input">Входящие на роутер</a>
+        <a class="tab" data-tab="forward">Транзит</a>
+        <a class="tab" data-tab="forwards">Проброс портов</a>
+        <a class="tab" data-tab="ruleset">Итоговый nftables</a>
+      </div>
+
+      <!-- правила (input / forward) -->
+      <div id="fw-rules-panel">
+        <p class="hint" id="fw-rules-hint"></p>
+        <div class="toolbar">
+          <button type="button" id="fw-add">+ Добавить правило</button>
+          <span id="fw-error" class="error"></span>
+        </div>
+
+        <form id="fw-form" class="card form oci" hidden>
+          <h2 id="fw-form-title">Новое правило</h2>
+          <div class="grid2">
+            <label>Действие
+              <select name="action">
+                <option value="accept">Разрешить (accept)</option>
+                <option value="drop">Запретить молча (drop)</option>
+                <option value="reject">Отклонить с ответом (reject)</option>
+              </select></label>
+            <label>Протокол
+              <select name="protocol">
+                <option value="all">Все</option><option value="tcp">TCP</option>
+                <option value="udp">UDP</option><option value="icmp">ICMP</option>
+              </select></label>
+            <label>Откуда (интерфейс)
+              <select name="in_zone">
+                <option value="any">Любой</option><option value="wan">WAN</option>
+                <option value="lan">LAN</option><option value="vpn">VPN</option>
+              </select></label>
+            <label>Источник CIDR <input name="src" placeholder="0.0.0.0/0"></label>
+            <label class="fwd-only">Куда (интерфейс)
+              <select name="out_zone">
+                <option value="any">Любой</option><option value="wan">WAN</option>
+                <option value="lan">LAN</option><option value="vpn">VPN</option>
+              </select></label>
+            <label class="fwd-only">Назначение CIDR <input name="dst" placeholder="0.0.0.0/0"></label>
+            <label class="ports">Порты источника <input name="src_ports" placeholder="Все"></label>
+            <label class="ports">Порты назначения <input name="dst_ports" placeholder="22 · 80, 443 · 5060-5070"></label>
+          </div>
+          <label class="row wide-row">Описание <input name="description" maxlength="120"></label>
+          <label class="check"><input type="checkbox" name="enabled" checked> Правило включено</label>
+          <div class="toolbar">
+            <button type="submit" id="fw-save">Добавить</button>
+            <button type="button" id="fw-cancel">Отмена</button>
+          </div>
+        </form>
+
+        <table class="compact fw-table">
+          <thead><tr><th>#</th><th>Действие</th><th>Откуда</th><th>Источник</th><th class="fwd-col">Куда</th>
+            <th class="fwd-col">Назначение</th><th>Протокол</th><th>Порты ист.</th><th>Порты назн.</th>
+            <th>Описание</th><th>Срабатывания</th><th></th></tr></thead>
+          <tbody id="fw-rules"></tbody>
+        </table>
+
+        <div class="card system-rules">
+          <h2>Системные правила (автоматически, после ваших)</h2>
+          <ul id="fw-system"></ul>
+        </div>
+      </div>
+
+      <!-- проброс портов -->
+      <div id="fw-forwards-panel" hidden>
+        <p class="hint">Порт на WAN-адресе роутера → устройство в LAN. Ответы устройства идут обратно автоматически.
+          В режиме VPN «весь трафик» проброс с WAN работать не будет — ответы уйдут в туннель.</p>
+        <div class="toolbar">
+          <button type="button" id="pf-add">+ Добавить проброс</button>
+          <span id="pf-error" class="error"></span>
+        </div>
+        <form id="pf-form" class="card form oci" hidden>
+          <h2 id="pf-form-title">Новый проброс</h2>
+          <div class="grid2">
+            <label>Протокол
+              <select name="protocol"><option value="tcp">TCP</option><option value="udp">UDP</option>
+                <option value="tcp+udp">TCP и UDP</option></select></label>
+            <label>Порт WAN <input name="wan_port" placeholder="8080 или 5060-5070" required></label>
+            <label>IP устройства в LAN <input name="to_ip" placeholder="192.168.88.20" required></label>
+            <label>Порт устройства <input name="to_port" type="number" min="1" max="65535" placeholder="тот же"></label>
+            <label>Разрешённые источники CIDR <input name="src" placeholder="все (0.0.0.0/0)"></label>
+          </div>
+          <label class="row wide-row">Описание <input name="description" maxlength="120"></label>
+          <label class="check"><input type="checkbox" name="enabled" checked> Проброс включён</label>
+          <div class="toolbar">
+            <button type="submit" id="pf-save">Добавить</button>
+            <button type="button" id="pf-cancel">Отмена</button>
+          </div>
+        </form>
+        <table class="compact fw-table">
+          <thead><tr><th>#</th><th>Протокол</th><th>Порт WAN</th><th>→ Устройство</th><th>Порт</th>
+            <th>Источник</th><th>Описание</th><th>Срабатывания</th><th></th></tr></thead>
+          <tbody id="pf-list"></tbody>
+        </table>
+      </div>
+
+      <!-- итоговый ruleset -->
+      <div id="fw-ruleset-panel" hidden>
+        <p class="hint">Так выглядит таблица <code>inet ubuntu_router</code>, которую роутер собирает из ваших
+          и системных правил и применяет атомарно командой <code>nft -f</code>.</p>
+        <pre id="fw-ruleset" class="code"></pre>
+      </div>
+    </section>
+
     <!-- Interfaces -->
     <section id="page-interfaces" class="page">
       <h1>Interfaces</h1>
@@ -322,6 +432,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.5.0"></script>
+  <script src="js/app.js?v=0.6.0"></script>
 </body>
 </html>
