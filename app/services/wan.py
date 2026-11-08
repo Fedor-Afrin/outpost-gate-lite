@@ -79,6 +79,31 @@ def cleanup(state: dict) -> None:
             print(f"[wan] WARNING: {e}")
 
 
+# --- вышестоящие DNS (для dnsmasq в LAN) ----------------------------------------
+def resolv_file() -> Path:
+    return Path(settings.data_dir) / "resolv.wan"
+
+
+def system_nameservers() -> list[str]:
+    """DNS из /etc/resolv.conf контейнера — запасной вариант (Docker, хост)."""
+    try:
+        lines = Path("/etc/resolv.conf").read_text().splitlines()
+    except OSError:
+        return []
+    return [l.split()[1] for l in lines if l.startswith("nameserver") and len(l.split()) > 1]
+
+
+def write_upstream_dns(dns: list[str]) -> None:
+    """dnsmasq сам следит за этим файлом и подхватывает изменения без перезапуска."""
+    servers = dns or system_nameservers() or ["1.1.1.1", "8.8.8.8"]
+    path = resolv_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".resolv.")
+    with os.fdopen(fd, "w") as f:
+        f.write("".join(f"nameserver {s}\n" for s in servers))
+    os.replace(tmp, path)
+
+
 # --- интерфейс ------------------------------------------------------------------
 def candidates() -> list[str]:
     return sorted(n for n in netlink.link_names() if not n.startswith(NOT_WAN))
@@ -175,9 +200,11 @@ def apply(cfg: WanConfig) -> None:
             netlink.link_set_up(ifname)
             state["state"] = "searching"
             save_state(state)
+            write_upstream_dns(cfg.dns)       # до получения аренды
             start_dhcp(ifname)
             return
         save_state(state)
+        write_upstream_dns(cfg.dns)
 
 
 def update(new: WanConfig) -> WanStatus:
@@ -194,6 +221,8 @@ def update(new: WanConfig) -> WanStatus:
         raise WanError(400, str(e)) from e
     with store.transaction() as cfg:
         cfg["wan"] = new.to_yaml()
+    from app.services import lan          # LAN зависит от WAN: NAT, фаервол, состав портов
+    lan.on_wan_changed()
     return status()
 
 

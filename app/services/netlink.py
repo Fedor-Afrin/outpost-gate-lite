@@ -47,6 +47,44 @@ def link_set_up(ifname: str) -> None:
         ipr.link("set", index=_index(ipr, ifname), state="up")
 
 
+# --- мост (bridge) --------------------------------------------------------------
+def bridge_create(name: str, mac: str | None = None) -> None:
+    """ip link add <name> type bridge (без STP и задержки — порты работают сразу)."""
+    from pyroute2 import NetlinkError
+    with _ipr() as ipr:
+        if not ipr.link_lookup(ifname=name):
+            try:
+                ipr.link("add", ifname=name, kind="bridge", br_stp_state=0, br_forward_delay=0)
+            except NetlinkError as e:
+                raise NetlinkOpError(f"не удалось создать мост {name}: {e}") from e
+        if mac:  # MAC моста = MAC первого порта: соседи (ARP) не заметят переезда адреса
+            ipr.link("set", index=_index(ipr, name), address=mac)
+
+
+def link_delete(name: str) -> None:
+    with _ipr() as ipr:
+        idx = ipr.link_lookup(ifname=name)
+        if idx:
+            ipr.link("del", index=idx[0])
+
+
+def link_set_master(port: str, bridge: str | None) -> None:
+    """ip link set <port> master <bridge>  /  nomaster (bridge=None)."""
+    from pyroute2 import NetlinkError
+    with _ipr() as ipr:
+        try:
+            idx = _index(ipr, port)
+        except NetlinkOpError:
+            if bridge is None:
+                return
+            raise
+        master = _index(ipr, bridge) if bridge else 0
+        try:
+            ipr.link("set", index=idx, master=master)
+        except NetlinkError as e:
+            raise NetlinkOpError(f"не удалось подключить {port} к {bridge}: {e}") from e
+
+
 def kernel_ipv4_addresses() -> list[tuple[str, str]]:
     """[(ifname, '192.168.88.1/24'), ...] — IPv4-адреса, реально назначенные в ядре."""
     with _ipr() as ipr:

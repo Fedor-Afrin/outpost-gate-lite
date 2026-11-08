@@ -46,6 +46,7 @@ def handle(event: str, env=os.environ) -> None:
             netlink.route_add("0.0.0.0/0", gateway, None, wan.WAN_METRIC, proto=netlink.RTPROT_DHCP)
         state.update(interface=ifname, state="bound", address=address, gateway=gateway, dns=dns,
                      lease_expires=time.time() + lease if lease else None)
+        wan.write_upstream_dns(wan.get_config().dns or dns)   # DNS, заданные вручную, важнее
         print(f"[dhcp] {ifname}: {event} {address} gw {gateway} dns {' '.join(dns)} lease {lease}s")
 
     elif event in ("leasefail", "nak"):

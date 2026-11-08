@@ -5,11 +5,12 @@ router.yaml — единый источник правды (аналог /export
 При старте API агент приводит систему к конфигу, строго по порядку:
   1. ip_forward
   2. WAN (адрес/шлюз или запуск DHCP-клиента)
-  3. адреса из Advanced → IP Addresses
-  4. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
-Дальше: LAN (мост + dnsmasq), VPN, nftables, Safe Mode.
+  3. LAN (мост br-lan, dnsmasq, NAT и фаервол)
+  4. адреса из Advanced → IP Addresses
+  5. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
+Дальше: VPN, Safe Mode.
 """
-from app.services import addresses, routes, sysctl, wan
+from app.services import addresses, lan, routes, sysctl, wan
 
 
 def _step(name: str, fn) -> None:
@@ -27,5 +28,6 @@ def apply_startup() -> None:
               "(нужен NET_ADMIN / --sysctl net.ipv4.ip_forward=1)")
 
     _step("WAN", wan.apply_startup)
+    _step("LAN", lan.apply_startup)
     _step("адреса", addresses.apply_all)
     _step("маршруты", routes.apply_all)

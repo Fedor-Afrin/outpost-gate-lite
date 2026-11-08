@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.0">
+  <link rel="stylesheet" href="css/style.css?v=0.3.0">
 </head>
 <body>
   <aside>
@@ -11,7 +11,7 @@
     <nav>
       <a class="disabled">Status</a>
       <a href="#wan" data-page="wan">WAN</a>
-      <a class="disabled">LAN</a>
+      <a href="#lan" data-page="lan">LAN</a>
       <a class="disabled">VPN</a>
       <a class="disabled">Firewall</a>
       <a class="disabled">Tools</a>
@@ -71,6 +71,66 @@
       </form>
     </section>
 
+    <!-- LAN -->
+    <section id="page-lan" class="page">
+      <h1>LAN</h1>
+
+      <div class="card">
+        <div class="status-grid">
+          <div><span class="label">Состояние</span><span id="ls-state">—</span></div>
+          <div><span class="label">DHCP и DNS</span><span id="ls-dns">—</span></div>
+          <div><span class="label">Мост</span><span id="ls-bridge">—</span></div>
+          <div><span class="label">Адрес роутера</span><span id="ls-addr">—</span></div>
+        </div>
+        <table class="compact">
+          <thead><tr><th>Порт</th><th>Роль</th><th>Линк</th><th>MAC</th></tr></thead>
+          <tbody id="lan-ports"></tbody>
+        </table>
+      </div>
+
+      <form id="lan-form" class="card form">
+        <h2>Настройки</h2>
+        <label class="check"><input type="checkbox" name="enabled"> Включить LAN (мост, DHCP, DNS, NAT)</label>
+        <label class="row">IP-адрес роутера / маска <input name="address" placeholder="192.168.88.1/24" required></label>
+
+        <div class="row-block">
+          <span>Порты LAN</span>
+          <label class="check"><input type="checkbox" name="ports_auto"> Все порты, кроме WAN</label>
+          <div id="lan-port-list" class="port-list"></div>
+        </div>
+
+        <h2>DHCP-сервер</h2>
+        <label class="check"><input type="checkbox" name="dhcp_enabled"> Раздавать адреса</label>
+        <label class="row">Начало диапазона <input name="pool_start" placeholder="192.168.88.10"></label>
+        <label class="row">Конец диапазона <input name="pool_end" placeholder="192.168.88.254"></label>
+        <label class="row">Срок аренды
+          <select name="lease_time">
+            <option value="1h">1 час</option><option value="12h">12 часов</option>
+            <option value="1d">1 день</option><option value="7d">7 дней</option>
+          </select>
+        </label>
+        <p class="hint">Клиенты получают роутер как шлюз и DNS. DNS-запросы роутер пересылает серверам WAN.</p>
+
+        <h2>Безопасность</h2>
+        <label class="check"><input type="checkbox" name="wan_management"> Разрешить управление со стороны WAN (веб и SSH)</label>
+        <p class="hint">Остальные входящие соединения с WAN закрыты всегда. Выключайте, когда роутер настроен и управляется из LAN или через VPN.</p>
+
+        <div class="toolbar">
+          <button type="submit">Применить</button>
+          <span id="lan-error" class="error"></span>
+          <span id="lan-ok" class="ok"></span>
+        </div>
+      </form>
+
+      <div class="card wide">
+        <h2>Устройства (DHCP-аренды)</h2>
+        <table class="compact">
+          <thead><tr><th>Имя</th><th>IP</th><th>MAC</th><th>Производитель</th><th>Аренда до</th></tr></thead>
+          <tbody id="lan-leases"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- Interfaces -->
     <section id="page-interfaces" class="page">
       <h1>Interfaces</h1>
@@ -127,6 +187,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.2.0"></script>
+  <script src="js/app.js?v=0.3.0"></script>
 </body>
 </html>
