@@ -1,4 +1,9 @@
-"""Схемы VPN → WireGuard (клиент)."""
+"""Схемы VPN → WireGuard и AmneziaWG (клиент).
+
+AmneziaWG — тот же WireGuard плюс параметры обфускации в [Interface]
+(Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5, J1–J3, Itime): мусорные пакеты и
+изменённые заголовки, чтобы DPI не узнавал протокол.
+"""
 from __future__ import annotations
 
 import ipaddress
@@ -8,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")   # 32 байта в base64
+AWG_KEY_RE = re.compile(r"^(jc|jmin|jmax|s[1-4]|h[1-4]|i[1-5]|j[1-3]|itime)$", re.IGNORECASE)
 ENDPOINT_RE = re.compile(r"^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):(\d{1,5})$")
 
 
@@ -36,6 +42,23 @@ class WgConfig(BaseModel):
         "full", description="full — весь трафик в туннель; split — только сети компании (allowed_ips)")
     nat: bool = Field(True, description="Маскировать LAN за адресом туннеля (нужно, если сервер не знает сеть LAN)")
     killswitch: bool = Field(True, description="В режиме full: без туннеля — без интернета")
+    obfuscation: dict[str, str] = Field(
+        default_factory=dict, description="Только AmneziaWG: Jc, Jmin, Jmax, S1, S2, H1–H4 …",
+        examples=[{"Jc": "4", "Jmin": "40", "Jmax": "70", "S1": "0", "S2": "0", "H1": "1"}])
+
+    @field_validator("obfuscation")
+    @classmethod
+    def _obf(cls, v: dict[str, str]) -> dict[str, str]:
+        out = {}
+        for key, value in v.items():
+            key, value = key.strip(), str(value).strip()
+            if not AWG_KEY_RE.match(key):
+                raise ValueError(f"неизвестный параметр AmneziaWG: {key}")
+            if not value or "\n" in value:
+                raise ValueError(f"пустое или многострочное значение {key}")
+            canon = key[0].upper() + key[1:].lower() if key.lower() in ("jc", "jmin", "jmax", "itime") else key.upper()
+            out[canon] = value
+        return out
 
     @field_validator("private_key")
     @classmethod
@@ -141,6 +164,7 @@ class WgConfig(BaseModel):
             "mode": self.mode,
             "nat": self.nat,
             "killswitch": self.killswitch,
+            **({"obfuscation": self.obfuscation} if self.obfuscation else {}),
         }
 
     @classmethod
@@ -154,14 +178,16 @@ class WgConfig(BaseModel):
             endpoint=p.get("endpoint"), allowed_ips=p.get("allowed-ips") or [],
             keepalive=p.get("persistent-keepalive", 25),
             mode=d.get("mode", "full"), nat=d.get("nat", True), killswitch=d.get("killswitch", True),
+            obfuscation=d.get("obfuscation") or {},
         )
 
 
 def parse_wg_quick(text: str) -> WgConfig:
     """Разобрать конфиг wg-quick (.conf от сервера WireGuard / Amnezia) в WgConfig."""
-    section, iface, peer = None, {}, {}
+    section, iface, peer, obf = None, {}, {}, {}
     for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
+        # комментарий # отрезаем, кроме I1–I5 у AmneziaWG: там # — часть значения
+        line = raw.strip() if re.match(r"^\s*I[1-5]\s*=", raw, re.IGNORECASE) else raw.split("#", 1)[0].strip()
         if not line:
             continue
         if line.startswith("["):
@@ -172,6 +198,9 @@ def parse_wg_quick(text: str) -> WgConfig:
         if "=" not in line:
             continue
         key, value = (x.strip() for x in line.split("=", 1))
+        if section == "interface" and AWG_KEY_RE.match(key):
+            obf[key] = value
+            continue
         target = iface if section == "interface" else peer if section == "peer" else None
         if target is not None:
             target[key.lower()] = value
@@ -192,14 +221,16 @@ def parse_wg_quick(text: str) -> WgConfig:
         allowed_ips=allowed,
         keepalive=int(peer.get("persistentkeepalive", 25)),
         mode="full" if full else "split",
+        obfuscation=obf,
     )
 
 
 class WgStatus(BaseModel):
+    kind: str = "wireguard"           # wireguard / amneziawg
     config: WgConfig                  # private_key в ответе всегда пустой
     private_key_set: bool = False
     public_key: str | None = None     # публичный ключ роутера — отдать администратору сервера
-    interface: str = "wg0"
+    interface: str = "wg0"            # wg0 / awg0
     active: bool = False              # интерфейс поднят
     connected: bool = False           # handshake был не дольше 3 минут назад
     endpoint_ip: str | None = None

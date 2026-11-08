@@ -13,6 +13,8 @@ services:
     cap_add:
       - NET_ADMIN        # действует только внутри своего namespace
       - NET_RAW
+    device_cgroup_rules:
+      - "c 108:0 rwm"    # /dev/ppp для L2TP (на хосте: sudo modprobe ppp_generic)
     sysctls:
       net.ipv4.ip_forward: "1"
     ports:

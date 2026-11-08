@@ -227,10 +227,47 @@ $("#static-leases").addEventListener("click", async (ev) => {
   } catch (e) { $("#static-error").textContent = e.message; }
 });
 
-// ---------------------------------------------------------------- VPN → WireGuard
+// ---------------------------------------------------------------- VPN: вкладки
+let vpnKind = "wireguard";
 let wgFormLoaded = false;
+let l2tpFormLoaded = false;
+const VPN_NAMES = { wireguard: "WireGuard", amneziawg: "AmneziaWG", l2tp: "L2TP/IPsec" };
 const splitList = (v) => v.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
 
+function selectVpnTab(kind) {
+  vpnKind = kind;
+  wgFormLoaded = false;
+  l2tpFormLoaded = false;
+  document.querySelectorAll("#vpn-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.kind === kind));
+  $("#wg-panel").hidden = kind === "l2tp";
+  $("#l2tp-panel").hidden = kind !== "l2tp";
+  $("#awg-obf").hidden = kind !== "amneziawg";
+  ["#wg-error", "#wg-ok", "#wg-parse-msg", "#l2tp-error", "#l2tp-ok"].forEach((id) => { $(id).textContent = ""; });
+  loadVpn().catch(console.error);
+}
+
+$("#vpn-tabs").addEventListener("click", (ev) => {
+  const t = ev.target.closest(".tab");
+  if (t) selectVpnTab(t.dataset.kind);
+});
+
+async function loadVpn() {
+  const sum = await api("GET", "/api/vpn");
+  document.querySelectorAll("#vpn-tabs .tab").forEach((t) => {
+    t.textContent = VPN_NAMES[t.dataset.kind] + (sum.enabled === t.dataset.kind ? " ●" : "");
+  });
+  $("#vpn-active-hint").textContent = sum.enabled
+    ? `Сейчас включён: ${VPN_NAMES[sum.enabled]}. Одновременно работает один туннель — включение другого выключит этот.`
+    : "Туннель не включён. Одновременно работает один туннель.";
+  return vpnKind === "l2tp" ? loadL2tp() : loadWg();
+}
+
+function ago(ts) {
+  const s = Math.round(Date.now() / 1000 - ts);
+  return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString();
+}
+
+// ---------------------------------------------------------------- VPN → WireGuard / AmneziaWG
 function wgModeChanged() {
   const f = $("#wg-form");
   f.killswitch.disabled = f.querySelector("input[name=mode]:checked")?.value !== "full";
@@ -252,16 +289,21 @@ function fillWgForm(c, privateKeySet) {
   f.endpoint.value = c.endpoint ?? "";
   f.allowed_ips.value = c.allowed_ips.join(", ");
   f.keepalive.value = c.keepalive;
+  f.obfuscation.value = Object.entries(c.obfuscation ?? {}).map(([k, v]) => `${k} = ${v}`).join("\n");
   wgModeChanged();
 }
 
-function ago(ts) {
-  const s = Math.round(Date.now() / 1000 - ts);
-  return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString();
+function parseObfuscation(text) {
+  const out = {};
+  text.split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => {
+    const i = l.indexOf("=");
+    if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  });
+  return out;
 }
 
-async function loadVpn() {
-  const w = await api("GET", "/api/vpn/wireguard");
+async function loadWg() {
+  const w = await api("GET", `/api/vpn/${vpnKind}`);
   $("#vs-state").innerHTML = !w.config.enabled ? "выключен"
     : w.connected ? '<span class="flag-r">подключён</span>'
     : w.active ? '<span class="flag-x">нет связи с сервером</span>' : '<span class="flag-x">ошибка — см. docker logs</span>';
@@ -284,7 +326,7 @@ $("#wg-parse").addEventListener("click", async () => {
   $("#wg-parse-msg").textContent = "";
   $("#wg-error").textContent = "";
   try {
-    const c = await api("POST", "/api/vpn/wireguard/parse", { text: $("#wg-import").value });
+    const c = await api("POST", `/api/vpn/${vpnKind}/parse`, { text: $("#wg-import").value });
     c.enabled = true;
     fillWgForm(c, false);
     $("#wg-parse-msg").textContent = "Поля заполнены — проверьте и нажмите «Применить»";
@@ -293,7 +335,7 @@ $("#wg-parse").addEventListener("click", async () => {
 
 $("#wg-genkey").addEventListener("click", async () => {
   try {
-    const k = await api("POST", "/api/vpn/wireguard/genkey");
+    const k = await api("POST", "/api/vpn/genkey");
     $("#wg-form").private_key.value = k.private_key;
     $("#wg-ok").textContent = `Публичный ключ роутера: ${k.public_key}`;
   } catch (e) { $("#wg-error").textContent = e.message; }
@@ -305,7 +347,7 @@ $("#wg-form").addEventListener("submit", async (ev) => {
   $("#wg-error").textContent = "";
   $("#wg-ok").textContent = "";
   try {
-    const w = await api("PUT", "/api/vpn/wireguard", {
+    const w = await api("PUT", `/api/vpn/${vpnKind}`, {
       enabled: f.enabled.checked,
       mode: f.querySelector("input[name=mode]:checked").value,
       killswitch: f.killswitch.checked,
@@ -319,11 +361,75 @@ $("#wg-form").addEventListener("submit", async (ev) => {
       endpoint: f.endpoint.value || null,
       allowed_ips: splitList(f.allowed_ips.value),
       keepalive: Number(f.keepalive.value || 0),
+      obfuscation: vpnKind === "amneziawg" ? parseObfuscation(f.obfuscation.value) : {},
     });
     fillWgForm(w.config, w.private_key_set);
     $("#wg-ok").textContent = "Применено";
     await loadVpn();
   } catch (e) { $("#wg-error").textContent = e.message; }
+});
+
+// ---------------------------------------------------------------- VPN → L2TP/IPsec
+function l2tpModeChanged() {
+  const f = $("#l2tp-form");
+  f.killswitch.disabled = f.querySelector("input[name=mode]:checked")?.value !== "full";
+}
+
+function fillL2tpForm(st) {
+  const f = $("#l2tp-form");
+  const c = st.config;
+  f.enabled.checked = c.enabled;
+  f.querySelector(`input[name=mode][value=${c.mode}]`).checked = true;
+  f.killswitch.checked = c.killswitch;
+  f.nat.checked = c.nat;
+  f.server.value = c.server ?? "";
+  f.psk.value = "";
+  f.psk.placeholder = st.psk_set ? "задан — пусто = не менять" : "";
+  f.username.value = c.username ?? "";
+  f.password.value = "";
+  f.password.placeholder = st.password_set ? "задан — пусто = не менять" : "";
+  f.networks.value = c.networks.join(", ");
+  f.mtu.value = c.mtu;
+  l2tpModeChanged();
+}
+
+async function loadL2tp() {
+  const st = await api("GET", "/api/vpn/l2tp");
+  $("#ls2-state").innerHTML = !st.config.enabled ? "выключен"
+    : st.connected ? '<span class="flag-r">подключён</span>' : '<span class="flag-x">подключаюсь…</span>';
+  $("#ls2-ipsec").innerHTML = !st.config.enabled ? "—"
+    : st.ipsec_up ? '<span class="flag-r">установлен</span>' : '<span class="flag-x">нет</span>';
+  $("#ls2-server").textContent = st.config.server ? `${st.config.server}${st.endpoint_ip ? " (" + st.endpoint_ip + ")" : ""}` : "—";
+  $("#ls2-ip").textContent = st.local_ip ? `${st.local_ip} ↔ ${st.remote_ip}` : "—";
+  $("#ls2-traffic").textContent = st.connected ? `↓ ${fmt(st.rx_bytes)}  ↑ ${fmt(st.tx_bytes)}` : "—";
+  $("#ls2-error").textContent = st.error ?? "";
+  if (!l2tpFormLoaded) { fillL2tpForm(st); l2tpFormLoaded = true; }
+}
+
+$("#l2tp-form").addEventListener("change", (ev) => { if (ev.target.name === "mode") l2tpModeChanged(); });
+
+$("#l2tp-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#l2tp-error").textContent = "";
+  $("#l2tp-ok").textContent = "";
+  try {
+    const st = await api("PUT", "/api/vpn/l2tp", {
+      enabled: f.enabled.checked,
+      mode: f.querySelector("input[name=mode]:checked").value,
+      killswitch: f.killswitch.checked,
+      nat: f.nat.checked,
+      server: f.server.value || null,
+      psk: f.psk.value || null,
+      username: f.username.value || null,
+      password: f.password.value || null,
+      networks: splitList(f.networks.value),
+      mtu: Number(f.mtu.value || 1400),
+    });
+    fillL2tpForm(st);
+    $("#l2tp-ok").textContent = "Применено";
+    await loadVpn();
+  } catch (e) { $("#l2tp-error").textContent = e.message; }
 });
 
 // ---------------------------------------------------------------- Interfaces
@@ -492,5 +598,6 @@ function show() {
 }
 
 window.addEventListener("hashchange", show);
+selectVpnTab("wireguard");
 loadSystem().catch(console.error);
 show();
