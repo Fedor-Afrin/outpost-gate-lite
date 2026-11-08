@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     # host   — управляет сетью сервера (network_mode: host)
     # gns3   — изолированный контейнер внутри GNS3
     # dev    — разработка на рабочем ПК (свой namespace, хост не трогается)

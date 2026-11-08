@@ -3,26 +3,74 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=0.2.0">
 </head>
 <body>
   <aside>
     <h2>Ubuntu Router</h2>
     <nav>
-      <a href="#interfaces" data-page="interfaces">Interfaces</a>
-      <div class="group">IP</div>
-      <a href="#ip-addresses" data-page="ip-addresses" class="sub">Addresses</a>
-      <a href="#ip-routes" data-page="ip-routes" class="sub">Routes</a>
-      <a class="sub disabled">DHCP Server</a>
-      <a class="sub disabled">DNS</a>
+      <a class="disabled">Status</a>
+      <a href="#wan" data-page="wan">WAN</a>
+      <a class="disabled">LAN</a>
+      <a class="disabled">VPN</a>
       <a class="disabled">Firewall</a>
       <a class="disabled">Tools</a>
       <a class="disabled">System</a>
+      <div class="group">Advanced</div>
+      <a href="#interfaces" data-page="interfaces" class="sub">Interfaces</a>
+      <a href="#ip-addresses" data-page="ip-addresses" class="sub">IP Addresses</a>
+      <a href="#ip-routes" data-page="ip-routes" class="sub">IP Routes</a>
     </nav>
     <p id="sysinfo"></p>
   </aside>
 
   <main>
+    <!-- WAN -->
+    <section id="page-wan" class="page">
+      <h1>WAN</h1>
+
+      <div class="card" id="wan-status">
+        <div class="status-grid">
+          <div><span class="label">Интерфейс</span><span id="ws-iface">—</span></div>
+          <div><span class="label">Линк</span><span id="ws-link">—</span></div>
+          <div><span class="label">Состояние</span><span id="ws-state">—</span></div>
+          <div><span class="label">IP-адрес</span><span id="ws-addr">—</span></div>
+          <div><span class="label">Шлюз</span><span id="ws-gw">—</span></div>
+          <div><span class="label">DNS</span><span id="ws-dns">—</span></div>
+          <div><span class="label">MAC</span><span id="ws-mac">—</span></div>
+          <div><span class="label">Аренда до</span><span id="ws-lease">—</span></div>
+        </div>
+        <button id="wan-renew" type="button" hidden>Обновить аренду DHCP</button>
+      </div>
+
+      <form id="wan-form" class="card form">
+        <h2>Настройки</h2>
+        <label class="row">Интерфейс WAN
+          <select name="interface" id="wan-iface"></select>
+        </label>
+
+        <fieldset class="modes">
+          <label><input type="radio" name="mode" value="dhcp"> Получить автоматически (DHCP)</label>
+          <label><input type="radio" name="mode" value="static"> Настроить вручную</label>
+          <label><input type="radio" name="mode" value="none"> Не настраивать (адрес задаёт система)</label>
+        </fieldset>
+
+        <div id="wan-static">
+          <label class="row">IP-адрес / маска <input name="address" placeholder="203.0.113.10/24"></label>
+          <label class="row">Шлюз <input name="gateway" placeholder="203.0.113.1"></label>
+        </div>
+        <label class="row">Предпочитаемый DNS <input name="dns1" placeholder="1.1.1.1"></label>
+        <label class="row">Альтернативный DNS <input name="dns2" placeholder="8.8.8.8"></label>
+        <p class="hint">В режиме DHCP поля DNS можно оставить пустыми — тогда используются DNS провайдера.</p>
+
+        <div class="toolbar">
+          <button type="submit">Применить</button>
+          <span id="wan-error" class="error"></span>
+          <span id="wan-ok" class="ok"></span>
+        </div>
+      </form>
+    </section>
+
     <!-- Interfaces -->
     <section id="page-interfaces" class="page">
       <h1>Interfaces</h1>
@@ -79,6 +127,6 @@
     </section>
   </main>
 
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=0.2.0"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        iproute2 nftables iputils-ping traceroute tcpdump procps \
+        iproute2 nftables iputils-ping traceroute tcpdump procps busybox \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/ubuntu-router
@@ -15,7 +15,7 @@ COPY app/ app/
 COPY web/ web/
 COPY config/router.yaml /etc/ubuntu-router/router.yaml
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && mkdir -p /var/lib/ubuntu-router
+RUN chmod +x /entrypoint.sh app/scripts/*.sh && mkdir -p /var/lib/ubuntu-router
 
 ENV ROUTER_MODE=dev \
     API_HOST=0.0.0.0 \
