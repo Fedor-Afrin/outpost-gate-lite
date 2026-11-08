@@ -820,7 +820,8 @@ async function loadSystemPage() {
       <tr><td><b>${esc(u.name)}</b>${u.name === me.name ? ' <span class="hint">(вы)</span>' : ""}</td>
         <td><select data-role="${esc(u.name)}"><option value="full" ${u.role === "full" ? "selected" : ""}>Полные права</option>
           <option value="read" ${u.role === "read" ? "selected" : ""}>Только просмотр</option></select></td>
-        <td>${u.must_change ? '<span class="flag-x">сменит при входе</span>' : "задан"}</td>
+        <td>${!u.has_password ? '<span class="flag-x">не задан</span>'
+          : u.must_change ? '<span class="flag-x">сменит при входе</span>' : "задан"}</td>
         <td class="actions">${u.name === me.name ? '<button type="button" data-own="1">Сменить пароль</button>'
           : `<button type="button" data-reset="${esc(u.name)}">Новый пароль</button>
              <button type="button" data-udel="${esc(u.name)}" class="danger">Удалить</button>`}</td></tr>`).join("");
@@ -868,7 +869,7 @@ $("#users").addEventListener("click", async (ev) => {
   const b = ev.target.closest("button");
   if (!b) return;
   try {
-    if (b.dataset.own) { $("#pwchange").hidden = false; return; }
+    if (b.dataset.own) { openPwChange(); return; }
     if (b.dataset.reset) {
       const pw = prompt(`Временный пароль для ${b.dataset.reset} (не короче 8 символов). Пользователь сменит его при входе:`);
       if (pw) await api("PUT", `/api/system/users/${b.dataset.reset}`, { password: pw });
@@ -1097,7 +1098,8 @@ async function checkAuth() {
   me = await api("GET", "/api/auth/me");
   if (!me.logged_in) return showLogin();
   $("#pwchange-cancel").hidden = me.must_change;
-  if (me.must_change) { $("#login").hidden = true; $("#pwchange").hidden = false; return; }
+  $("#nopw-banner").hidden = me.has_password;
+  if (me.must_change) { $("#login").hidden = true; openPwChange(); return; }
   $("#login").hidden = true;
   $("#pwchange").hidden = true;
   $("#whoami").textContent = `${me.name}${me.role === "read" ? " (просмотр)" : ""}`;
@@ -1141,11 +1143,24 @@ $("#pwchange-form").addEventListener("submit", async (ev) => {
   $("#pwchange-error").textContent = "";
   if (f.new.value !== f.new2.value) { $("#pwchange-error").textContent = "пароли не совпадают"; return; }
   try {
-    await api("POST", "/api/auth/password", { old: f.old.value, new: f.new.value });
+    await api("POST", "/api/auth/password", { old: me && !me.has_password ? "" : f.old.value, new: f.new.value });
     f.reset();
     await checkAuth();
   } catch (e) { $("#pwchange-error").textContent = e.message; }
 });
+
+function openPwChange() {
+  const first = me && !me.has_password;
+  $("#pwchange-title").textContent = first ? "Задайте пароль" : "Смените пароль";
+  $("#pwchange-hint").textContent = first
+    ? "Сейчас вход без пароля. Задайте пароль администратора — не короче 8 символов."
+    : me && me.must_change ? "Пароль был выдан администратором — задайте свой (не короче 8 символов)."
+    : "Новый пароль — не короче 8 символов. Остальные сессии будут завершены.";
+  $("#pwchange-old").hidden = first;
+  $("#pwchange").hidden = false;
+}
+
+$("#nopw-set").addEventListener("click", openPwChange);
 
 $("#pwchange-cancel").addEventListener("click", () => {
   if (me && me.logged_in && !me.must_change) $("#pwchange").hidden = true;   // при обязательной смене — нельзя

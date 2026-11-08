@@ -5,8 +5,9 @@
     отдельно в data/users.json, поэтому восстановление бэкапа не заблокирует вход;
   * сессия — подписанный HMAC токен в cookie (HttpOnly, SameSite=Strict) или в заголовке
     Authorization: Bearer (для CLI и скриптов). Смена пароля сразу обнуляет старые сессии;
-  * первый запуск: создаётся admin со случайным паролем, он печатается в docker logs,
-    при первом входе пароль нужно сменить (или задайте ROUTER_ADMIN_PASSWORD);
+  * первый запуск, как в MikroTik: admin БЕЗ пароля (поле пароля пустое), пока пароль
+    не задан — в веб-интерфейсе висит напоминание. Вход без пароля — только из локальной
+    сети (10/8, 172.16/12, 192.168/16, localhost). Или задайте ROUTER_ADMIN_PASSWORD;
   * роли: full — всё, read — только просмотр;
   * защита от подбора: 5 неудачных входов с одного IP за 5 минут -> пауза.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -50,6 +52,7 @@ class User:
     name: str
     role: str
     must_change: bool = False
+    has_password: bool = True
 
 
 # --- хранение ------------------------------------------------------------------------------
@@ -99,6 +102,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    if stored == "":                      # пароль не задан: подходит только пустой
+        return password == ""
     try:
         _, n, r, p, salt, dk = stored.split("$")
         test = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p),
@@ -143,7 +148,19 @@ def user_from_token(token: str | None) -> User | None:
     u = next((u for u in _load() if u["name"] == data.get("u")), None)
     if not u or u["hash"][-12:] != data.get("v"):       # пароль сменили — старые сессии не действуют
         return None
-    return User(u["name"], u["role"], u.get("must_change", False))
+    return _user(u)
+
+
+def _user(u: dict) -> User:
+    return User(u["name"], u["role"], u.get("must_change", False), bool(u["hash"]))
+
+
+def is_local(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback
 
 
 def token_from(cookies: dict, headers: dict) -> str | None:
@@ -168,8 +185,10 @@ def login(name: str, password: str, ip: str) -> tuple[User, str]:
         if not u or not verify_password(password or "", u["hash"]):
             _fails.setdefault(ip, []).append(time.time())
             raise AuthError(401, "неверное имя или пароль")
+        if not u["hash"] and not is_local(ip):
+            raise AuthError(403, "пароль не задан: вход без пароля разрешён только из локальной сети")
         _fails.pop(ip, None)
-        return User(u["name"], u["role"], u.get("must_change", False)), make_token(u["name"])
+        return _user(u), make_token(u["name"])
 
 
 def check_access(path: str, method: str, user: User | None) -> tuple[int, str] | None:
@@ -190,7 +209,8 @@ def check_access(path: str, method: str, user: User | None) -> tuple[int, str] |
 
 # --- пользователи -------------------------------------------------------------------------------------
 def list_users() -> list[dict]:
-    return [{"name": u["name"], "role": u["role"], "must_change": u.get("must_change", False)} for u in _load()]
+    return [{"name": u["name"], "role": u["role"], "must_change": u.get("must_change", False),
+             "has_password": bool(u["hash"])} for u in _load()]
 
 
 def add_user(name: str, password: str, role: str, must_change: bool = False) -> None:
@@ -253,16 +273,14 @@ def delete_user(name: str, current: str) -> None:
 
 
 def ensure_admin() -> None:
-    """Первый запуск: создать admin. Пароль — из ROUTER_ADMIN_PASSWORD или случайный (в docker logs)."""
+    """Первый запуск: создать admin — без пароля (как MikroTik) или с ROUTER_ADMIN_PASSWORD."""
     if _load():
         return
     preset = os.getenv("ROUTER_ADMIN_PASSWORD")
-    password = preset if preset and len(preset) >= MIN_PASSWORD else secrets.token_urlsafe(9)
-    add_user("admin", password, "full", must_change=not preset)
-    if preset:
+    if preset and len(preset) >= MIN_PASSWORD:
+        add_user("admin", preset, "full")
         print("[auth] создан пользователь admin с паролем из ROUTER_ADMIN_PASSWORD")
-    else:
-        print("[auth] " + "=" * 60)
-        print(f"[auth]  Первый запуск: пользователь admin, пароль: {password}")
-        print("[auth]  При первом входе пароль нужно будет сменить.")
-        print("[auth] " + "=" * 60)
+        return
+    _save([{"name": "admin", "hash": "", "role": "full", "must_change": False}])
+    print("[auth] первый запуск: пользователь admin БЕЗ пароля (вход только из локальной сети).")
+    print("[auth] Задайте пароль: веб-интерфейс -> плашка «Пароль не задан» или System -> Пользователи.")

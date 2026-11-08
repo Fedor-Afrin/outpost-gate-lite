@@ -43,7 +43,8 @@ def login(body: LoginBody, request: Request, response: Response):
         raise HTTPException(e.status, e.message)
     system.audit(user.name, "LOGIN", "вход", 200, _ip(request))
     _set_cookie(response, request, token)
-    return {"name": user.name, "role": user.role, "must_change": user.must_change, "token": token}
+    return {"name": user.name, "role": user.role, "must_change": user.must_change,
+            "has_password": user.has_password, "token": token}
 
 
 @router.post("/logout")
@@ -58,7 +59,7 @@ def me(request: Request):
     if not user:
         return {"logged_in": False}
     return {"logged_in": True, "name": user.name, "role": user.role, "must_change": user.must_change,
-            "identity": system.identity()}
+            "has_password": user.has_password, "identity": system.identity()}
 
 
 @router.post("/password")
