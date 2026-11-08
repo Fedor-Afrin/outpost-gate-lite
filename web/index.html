@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.6.0">
+  <link rel="stylesheet" href="css/style.css?v=0.7.0">
 </head>
 <body>
   <aside>
@@ -14,7 +14,7 @@
       <a href="#lan" data-page="lan">LAN</a>
       <a href="#vpn" data-page="vpn">VPN</a>
       <a href="#firewall" data-page="firewall">Firewall</a>
-      <a class="disabled">Tools</a>
+      <a href="#tools" data-page="tools">Tools</a>
       <a class="disabled">System</a>
       <div class="group">Advanced</div>
       <a href="#interfaces" data-page="interfaces" class="sub">Interfaces</a>
@@ -376,6 +376,54 @@
       </div>
     </section>
 
+    <!-- Tools -->
+    <section id="page-tools" class="page">
+      <h1>Tools</h1>
+      <div class="tabs" id="tool-tabs">
+        <a class="tab" data-tool="ping">Ping</a>
+        <a class="tab" data-tool="tcp_ping">TCP Ping</a>
+        <a class="tab" data-tool="traceroute">Traceroute</a>
+        <a class="tab" data-tool="dns">DNS</a>
+        <a class="tab" data-tool="neighbors">Соседи (ARP)</a>
+        <a class="tab" data-tool="scan">Сканер сети</a>
+        <a class="tab" data-tool="capture">Захват пакетов</a>
+      </div>
+
+      <form id="tool-form" class="card tool-form">
+        <p class="hint" id="tool-hint"></p>
+        <div class="tool-fields">
+          <label data-f="host">Адрес или имя <input name="host" placeholder="8.8.8.8 или example.com"></label>
+          <label data-f="port">Порт <input name="port" type="number" min="1" max="65535" value="443"></label>
+          <label data-f="count">Количество <input name="count" type="number" min="1" max="2000" value="4"></label>
+          <label data-f="size">Размер, байт <input name="size" type="number" min="8" max="1472" value="56"></label>
+          <label data-f="method">Метод
+            <select name="method"><option value="udp">UDP (по умолчанию)</option><option value="icmp">ICMP</option>
+              <option value="tcp">TCP (на порт)</option></select></label>
+          <label data-f="max_hops">Макс. хопов <input name="max_hops" type="number" min="1" max="64" value="30"></label>
+          <label data-f="network">Сеть <input name="network" placeholder="192.168.88.0/24"></label>
+          <label data-f="ports">TCP-порты <input name="ports" placeholder="22, 80, 443, 5060"></label>
+          <label data-f="interface">Интерфейс <select name="interface"></select></label>
+          <label data-f="seconds">Секунд, не больше <input name="seconds" type="number" min="1" max="120" value="30"></label>
+          <label data-f="filter" class="wide">Фильтр (BPF) <input name="filter" placeholder="host 192.168.88.20 and port 5060"></label>
+        </div>
+        <div class="toolbar">
+          <button type="submit" id="tool-start">Старт</button>
+          <button type="button" id="tool-stop" disabled>Стоп</button>
+          <a id="tool-pcap" href="/api/tools/capture.pcap" hidden>⬇ Скачать .pcap для Wireshark</a>
+          <span id="tool-status" class="hint"></span>
+          <span id="tool-error" class="error"></span>
+        </div>
+      </form>
+
+      <div id="tool-summary" class="summary" hidden></div>
+      <div class="card wide tool-result">
+        <table class="compact">
+          <thead id="tool-head"></thead>
+          <tbody id="tool-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- Interfaces -->
     <section id="page-interfaces" class="page">
       <h1>Interfaces</h1>
@@ -432,6 +480,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.6.0"></script>
+  <script src="js/app.js?v=0.7.0"></script>
 </body>
 </html>

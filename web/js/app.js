@@ -612,6 +612,165 @@ $("#pf-list").addEventListener("click", async (ev) => {
   } catch (e) { $("#pf-error").textContent = e.message; }
 });
 
+// ---------------------------------------------------------------- Tools
+const ms = (v) => v == null ? "—" : `${v} мс`;
+const statusCell = (s) => s === "ok" || s === "open" ? `<span class="flag-r">${s === "ok" ? "ответ" : "открыт"}</span>`
+  : `<span class="flag-x">${esc(s === "timeout" ? "нет ответа" : s === "closed" ? "закрыт" : s)}</span>`;
+
+const TOOLS = {
+  ping: {
+    fields: ["host", "count", "size", "interface"],
+    hint: "ICMP echo. Если узел не отвечает на ping — это не всегда значит, что он недоступен: попробуйте TCP Ping.",
+    cols: ["#", "От", "TTL", "Время", "Статус"],
+    row: (r) => [r.seq, esc(r.from ?? "—"), r.ttl ?? "—", ms(r.time_ms), statusCell(r.status)],
+    summary: (d) => `Отправлено ${d.sent ?? "—"}, получено ${d.received ?? "—"}, потери ${d.loss ?? "—"}%`
+      + (d.avg != null ? ` · мин/сред/макс ${d.min}/${d.avg}/${d.max} мс` : ""),
+  },
+  tcp_ping: {
+    fields: ["host", "port", "count"],
+    hint: "Время установления TCP-соединения. Работает там, где ICMP закрыт: проверка веб-сервера, SIP по TCP, SSH.",
+    cols: ["#", "Порт", "Время", "Статус"],
+    row: (r) => [r.seq, r.port, ms(r.time_ms), statusCell(r.status)],
+    summary: (d) => `Попыток ${d.sent}, открыто ${d.received}, потери ${d.loss}%`
+      + (d.avg != null ? ` · мин/сред/макс ${d.min}/${d.avg}/${d.max} мс` : ""),
+  },
+  traceroute: {
+    fields: ["host", "method", "port", "max_hops", "interface"],
+    hint: "Путь пакета до узла. «*» — узел не ответил (часто это просто фильтр, а не обрыв). Через VPN видны хопы внутри туннеля.",
+    cols: ["Хоп", "Адрес", "Время 1", "Время 2", "Время 3", "Примечание"],
+    row: (r) => [r.hop, esc(r.ip ?? "*") + (r.other_ips.length ? `<br><span class="hint">${r.other_ips.map(esc).join(", ")}</span>` : ""),
+      ...[0, 1, 2].map((i) => r.times[i] == null ? "*" : `${r.times[i]} мс`), esc(r.notes.join(" "))],
+  },
+  dns: {
+    fields: ["host"],
+    hint: "Разрешение имени через DNS роутера — так же, как его видят устройства LAN (через туннель, если VPN «весь трафик»).",
+    cols: ["Имя", "Адреса", "Время"],
+  },
+  neighbors: {
+    fields: [],
+    hint: "Таблица соседей ядра (ARP): кто в последнее время общался с роутером. Имена — из DHCP и закреплённых адресов.",
+    cols: ["IP", "MAC", "Производитель", "Имя", "Интерфейс", "Состояние"],
+    row: (r) => [esc(r.ip), esc(r.mac ?? "—"), esc(r.vendor ?? "—"), esc(r.name ?? "—"), esc(r.interface), esc(r.state ?? "")],
+  },
+  scan: {
+    fields: ["network", "ports"],
+    hint: "Ping-обход подсети + ARP: находит и устройства, которые не отвечают на ping (телефоны, Windows). Порты проверяются только у найденных.",
+    cols: ["IP", "MAC", "Производитель", "Имя", "Ping", "Открытые порты", "Найден по"],
+    row: (r) => [esc(r.ip), esc(r.mac ?? "—"), esc(r.vendor ?? "—"), esc(r.name ?? "—"), ms(r.ping_ms),
+      r.open_ports ? (r.open_ports.join(", ") || "—") : "", r.source === "arp" ? "ARP" : "ping"],
+    summary: (d) => `Сеть ${d.network}: проверено ${d.scanned}, найдено ${d.found}`,
+  },
+  capture: {
+    fields: ["interface", "count", "seconds", "filter"],
+    hint: "tcpdump: пакеты в реальном времени, а полный захват — файлом .pcap для Wireshark. Фильтр — выражение BPF.",
+    cols: ["Время", "Интерфейс", "Протокол", "Источник", "Назначение", "Инфо"],
+    row: (r) => [esc(r.time), esc(r.interface ? `${r.interface} ${r.direction ?? ""}` : "—"), esc(r.proto),
+      esc(r.src ?? ""), esc(r.dst ?? ""), `<span class="mono">${esc(r.info)}</span>`],
+    summary: (d) => `Захвачено пакетов: ${d.packets}`,
+  },
+};
+
+let tool = "ping";
+let toolWs = null;
+let toolInterfaces = null;
+
+function toolBusy(busy) {
+  $("#tool-start").disabled = busy;
+  $("#tool-stop").disabled = !busy;
+  $("#tool-status").textContent = busy ? "выполняется…" : "";
+}
+
+async function selectTool(name) {
+  if (toolWs) toolWs.close();
+  tool = name;
+  const t = TOOLS[name];
+  document.querySelectorAll("#tool-tabs .tab").forEach((x) => x.classList.toggle("active", x.dataset.tool === name));
+  document.querySelectorAll("#tool-form [data-f]").forEach((l) => { l.hidden = !t.fields.includes(l.dataset.f); });
+  $("#tool-form").count.max = name === "capture" ? 2000 : 100;
+  $("#tool-form").count.value = name === "capture" ? 200 : 4;
+  $("#tool-hint").textContent = t.hint;
+  $("#tool-head").innerHTML = `<tr>${t.cols.map((c) => `<th>${c}</th>`).join("")}</tr>`;
+  $("#tool-rows").innerHTML = "";
+  $("#tool-summary").hidden = true;
+  $("#tool-error").textContent = "";
+  $("#tool-pcap").hidden = true;
+  $("#tool-start").textContent = name === "neighbors" ? "Обновить" : "Старт";
+  toolBusy(false);
+  if (!toolInterfaces) {
+    try {
+      toolInterfaces = await api("GET", "/api/tools/interfaces");
+      const sel = $("#tool-form").interface;
+      sel.innerHTML = '<option value="auto">авто</option>'
+        + toolInterfaces.interfaces.map((i) => `<option>${esc(i)}</option>`).join("");
+      $("#tool-form").network.value = toolInterfaces.scan_network ?? "";
+    } catch (e) { console.error(e); }
+  }
+  $("#tool-form").interface.value = name === "capture" && toolInterfaces?.interfaces.includes("br-lan") ? "br-lan" : "auto";
+  if (name === "neighbors") runTool();
+}
+
+function addToolRow(r) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = TOOLS[tool].row(r).map((c) => `<td>${c}</td>`).join("");
+  $("#tool-rows").appendChild(tr);
+  if ($("#tool-rows").children.length > 2000) $("#tool-rows").firstChild.remove();
+}
+
+let summaryData = {};
+function showSummary(d) {
+  summaryData = { ...summaryData, ...d };
+  const fn = TOOLS[tool].summary;
+  if (!fn) return;
+  $("#tool-summary").textContent = fn(summaryData);
+  $("#tool-summary").hidden = false;
+}
+
+async function runTool() {
+  const f = $("#tool-form");
+  $("#tool-rows").innerHTML = "";
+  $("#tool-error").textContent = "";
+  $("#tool-summary").hidden = true;
+  summaryData = {};
+
+  if (tool === "neighbors") {
+    try { (await api("GET", "/api/tools/neighbors")).forEach(addToolRow); }
+    catch (e) { $("#tool-error").textContent = e.message; }
+    return;
+  }
+  if (tool === "dns") {
+    try {
+      const d = await api("GET", `/api/tools/dns?host=${encodeURIComponent(f.host.value)}`);
+      $("#tool-rows").innerHTML = `<tr><td>${esc(d.host)}</td><td>${d.error ? `<span class="flag-x">${esc(d.error)}</span>`
+        : d.addresses.map(esc).join("<br>")}</td><td>${ms(d.time_ms)}</td></tr>`;
+    } catch (e) { $("#tool-error").textContent = e.message; }
+    return;
+  }
+
+  const params = {};
+  TOOLS[tool].fields.forEach((name) => { params[name] = f[name].value; });
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  toolWs = new WebSocket(`${proto}://${location.host}/api/tools/ws`);
+  toolBusy(true);
+  toolWs.onopen = () => toolWs.send(JSON.stringify({ tool, params }));
+  toolWs.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === "row") addToolRow(ev.row);
+    else if (ev.type === "summary") { showSummary(ev.data); if (tool === "capture" && ev.data.pcap) $("#tool-pcap").hidden = false; }
+    else if (ev.type === "info") $("#tool-status").textContent = ev.text;
+    else if (ev.type === "error") $("#tool-error").textContent = ev.text;
+  };
+  toolWs.onclose = () => { toolBusy(false); toolWs = null; };
+}
+
+$("#tool-tabs").addEventListener("click", (ev) => {
+  const t = ev.target.closest(".tab");
+  if (t) selectTool(t.dataset.tool);
+});
+$("#tool-form").addEventListener("submit", (ev) => { ev.preventDefault(); runTool(); });
+$("#tool-stop").addEventListener("click", () => {
+  if (toolWs && toolWs.readyState === WebSocket.OPEN) toolWs.send(JSON.stringify({ action: "stop" }));
+});
+
 // ---------------------------------------------------------------- Interfaces
 let interfacesCache = [];
 
@@ -762,6 +921,7 @@ const pages = {
   "lan": loadLan,
   "vpn": loadVpn,
   "firewall": loadFirewall,
+  "tools": async () => {},          // инструменты обновляются сами, без опроса
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,
@@ -781,5 +941,6 @@ function show() {
 window.addEventListener("hashchange", show);
 selectVpnTab("wireguard");
 selectFwTab("input");
+selectTool("ping");
 loadSystem().catch(console.error);
 show();

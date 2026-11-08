@@ -90,3 +90,17 @@ textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; b
 pre.code { background: #1e2733; color: #d8e1ea; padding: 16px; border-radius: 6px; font-size: 12.5px;
            overflow: auto; max-width: 1000px; line-height: 1.45; }
 button:disabled { opacity: .4; cursor: default; }
+
+/* --- Tools --- */
+.tool-form { max-width: 1000px; }
+.tool-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+.tool-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #3d5166; }
+.tool-fields input, .tool-fields select { padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; width: 150px; }
+.tool-fields label[data-f="host"] input, .tool-fields label[data-f="network"] input, .tool-fields label[data-f="ports"] input { width: 220px; }
+.tool-fields label.wide input { width: 420px; }
+.summary { max-width: 1000px; background: #eef6ef; border: 1px solid #cfe6d3; border-radius: 6px; padding: 10px 16px;
+           margin-bottom: 12px; font-size: 14px; }
+.tool-result { overflow-x: auto; }
+.tool-result td { font-size: 13px; }
+.mono { font-family: monospace; font-size: 12px; }
+#tool-pcap { font-size: 14px; }
