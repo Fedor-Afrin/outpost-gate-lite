@@ -1,4 +1,5 @@
 """Точка входа FastAPI-приложения Ubuntu Router."""
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,7 +23,8 @@ async def lifespan(_: FastAPI):
     auth.ensure_admin()                        # первый запуск: admin + пароль в docker logs
     system_svc.safe_mode.recover_on_startup()  # перезапуск посреди Safe Mode = откат
     # Агент работает внутри процесса API: DHCP-клиентом WAN управляет этот процесс
-    agent.apply_startup()
+    # в отдельном потоке: pyroute2 не должен видеть цикл событий uvicorn
+    await asyncio.to_thread(agent.apply_startup)
     yield
     vpn_svc.stop_all()
     lan_svc.stop_dnsmasq()

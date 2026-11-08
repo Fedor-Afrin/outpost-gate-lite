@@ -11,6 +11,7 @@ services:
     restart: unless-stopped   # «Перезапустить сервис» в System: Docker поднимет контейнер сам
     environment:
       ROUTER_MODE: dev
+      PYTHONUNBUFFERED: "1"
       # ROUTER_ADMIN_PASSWORD: "свой-пароль"   # иначе случайный — смотрите docker compose logs
     cap_add:
       - NET_ADMIN        # действует только внутри своего namespace

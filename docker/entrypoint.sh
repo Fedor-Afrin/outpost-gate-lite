@@ -10,4 +10,4 @@ mkdir -p /dev/net
 
 # Агент применения конфига запускается внутри API (lifespan в app/main.py):
 # DHCP-клиентом, dnsmasq и VPN-процессами владеет долгоживущий процесс.
-exec uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" --log-level "${LOG_LEVEL:-info}"
+exec uvicorn app.main:app --loop asyncio --host "${API_HOST}" --port "${API_PORT}" --log-level "${LOG_LEVEL:-info}"
