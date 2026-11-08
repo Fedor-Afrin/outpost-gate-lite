@@ -16,6 +16,10 @@ async function api(method, url, body) {
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401 && !url.startsWith("/api/auth/")) {
+    showLogin();
+    throw new Error("нужен вход");
+  }
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try {
@@ -771,6 +775,145 @@ $("#tool-stop").addEventListener("click", () => {
   if (toolWs && toolWs.readyState === WebSocket.OPEN) toolWs.send(JSON.stringify({ action: "stop" }));
 });
 
+// ---------------------------------------------------------------- System
+let sysTab = "overview";
+
+function selectSysTab(tab) {
+  sysTab = tab;
+  document.querySelectorAll("#sys-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  document.querySelectorAll("#page-system [data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab; });
+  if (location.hash === "#system") loadSystemPage().catch(console.error);
+}
+$("#sys-tabs").addEventListener("click", (ev) => {
+  const t = ev.target.closest(".tab");
+  if (t) selectSysTab(t.dataset.tab);
+});
+
+function duration(sec) {
+  if (sec == null) return "—";
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  return (d ? `${d} д ` : "") + `${h} ч ${m} мин`;
+}
+
+const tile = (label, value, pct) => `<div class="tile"><span class="label">${label}</span><b>${value}</b>`
+  + (pct != null ? `<div class="bar"><i style="width:${Math.min(pct, 100)}%" class="${pct > 85 ? "hot" : ""}"></i></div>` : "")
+  + "</div>";
+
+async function loadSystemPage() {
+  if (sysTab === "overview") {
+    const r = await api("GET", "/api/system/resource");
+    $("#sys-tiles").innerHTML =
+      tile("CPU", r.cpu_percent == null ? "…" : `${r.cpu_percent}%`, r.cpu_percent)
+      + tile("Память", `${fmt(r.memory.used)} / ${fmt(r.memory.total)}`, r.memory.percent)
+      + tile("Диск", `${fmt(r.disk.used)} / ${fmt(r.disk.total)}`, r.disk.percent)
+      + tile("Uptime", duration(r.uptime))
+      + (r.temperature != null ? tile("Температура", `${r.temperature} °C`, r.temperature) : "");
+    const row = (k, v) => `<div><span class="label">${k}</span><span>${esc(v ?? "—")}</span></div>`;
+    $("#sys-info").innerHTML = row("Устройство", r.model) + row("Архитектура", `${r.arch}, ${r.cpu_count} CPU`)
+      + row("Ядро", r.kernel) + row("Версия", r.version) + row("Режим", r.mode) + row("Hostname", r.hostname)
+      + row("Нагрузка", r.load.join(" / ")) + row("Время", new Date(r.time).toLocaleString());
+    const f = $("#identity-form");
+    if (document.activeElement !== f.identity) f.identity.value = r.identity;
+  } else if (sysTab === "users") {
+    const users = await api("GET", "/api/system/users");
+    $("#users").innerHTML = users.map((u) => `
+      <tr><td><b>${esc(u.name)}</b>${u.name === me.name ? ' <span class="hint">(вы)</span>' : ""}</td>
+        <td><select data-role="${esc(u.name)}"><option value="full" ${u.role === "full" ? "selected" : ""}>Полные права</option>
+          <option value="read" ${u.role === "read" ? "selected" : ""}>Только просмотр</option></select></td>
+        <td>${u.must_change ? '<span class="flag-x">сменит при входе</span>' : "задан"}</td>
+        <td class="actions">${u.name === me.name ? '<button type="button" data-own="1">Сменить пароль</button>'
+          : `<button type="button" data-reset="${esc(u.name)}">Новый пароль</button>
+             <button type="button" data-udel="${esc(u.name)}" class="danger">Удалить</button>`}</td></tr>`).join("");
+  } else if (sysTab === "backup") {
+    const snaps = await api("GET", "/api/system/snapshots");
+    $("#snapshots").innerHTML = snaps.map((x) => `
+      <tr><td>${new Date(x.time).toLocaleString()}</td><td>${fmt(x.size)}</td>
+        <td class="actions"><a href="/api/system/snapshots/${encodeURIComponent(x.name)}">скачать</a>
+          <button type="button" data-snap="${esc(x.name)}">Восстановить</button></td></tr>`).join("")
+      || '<tr><td colspan="3" class="hint">снимков пока нет — они появятся после первого изменения</td></tr>';
+  } else if (sysTab === "audit") {
+    const log = await api("GET", "/api/system/audit?limit=300");
+    $("#audit").innerHTML = log.map((x) => `
+      <tr class="${x.status >= 400 ? "row-inactive" : ""}"><td>${new Date(x.time).toLocaleString()}</td><td>${esc(x.user)}</td>
+        <td>${esc(x.method)}</td><td class="mono">${esc(x.path)}</td><td>${x.status}</td><td>${esc(x.ip)}</td></tr>`).join("")
+      || '<tr><td colspan="6" class="hint">записей нет</td></tr>';
+  }
+}
+
+$("#identity-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    const r = await api("PUT", "/api/system/identity", { identity: ev.target.identity.value });
+    setIdentity(r.identity);
+    $("#identity-msg").textContent = "Сохранено";
+  } catch (e) { $("#identity-msg").textContent = e.message; }
+});
+
+$("#restart-btn").addEventListener("click", async () => {
+  if (!confirm("Перезапустить сервис роутера? Связь пропадёт на несколько секунд.")) return;
+  const r = await api("POST", "/api/system/restart");
+  $("#restart-msg").textContent = r.message;
+  setTimeout(() => location.reload(), 8000);
+});
+
+$("#users").addEventListener("change", async (ev) => {
+  const sel = ev.target.closest("select[data-role]");
+  if (!sel) return;
+  try { await api("PUT", `/api/system/users/${sel.dataset.role}`, { role: sel.value }); }
+  catch (e) { alert(e.message); }
+  loadSystemPage();
+});
+
+$("#users").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.own) { $("#pwchange").hidden = false; return; }
+    if (b.dataset.reset) {
+      const pw = prompt(`Временный пароль для ${b.dataset.reset} (не короче 8 символов). Пользователь сменит его при входе:`);
+      if (pw) await api("PUT", `/api/system/users/${b.dataset.reset}`, { password: pw });
+    }
+    if (b.dataset.udel && confirm(`Удалить пользователя ${b.dataset.udel}?`)) {
+      await api("DELETE", `/api/system/users/${b.dataset.udel}`);
+    }
+  } catch (e) { alert(e.message); }
+  loadSystemPage();
+});
+
+$("#user-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#user-error").textContent = "";
+  try {
+    await api("POST", "/api/system/users", { name: f.name.value, password: f.password.value, role: f.role.value });
+    f.reset();
+    loadSystemPage();
+  } catch (e) { $("#user-error").textContent = e.message; }
+});
+
+$("#restore-btn").addEventListener("click", async () => {
+  const file = $("#restore-file").files[0];
+  $("#restore-msg").textContent = "";
+  $("#restore-error").textContent = "";
+  if (!file) { $("#restore-error").textContent = "выберите файл .yaml"; return; }
+  if (!confirm("Заменить текущую конфигурацию роутера содержимым файла? Текущая версия сохранится в снимках.")) return;
+  try {
+    await api("POST", "/api/system/restore", { text: await file.text(), filename: file.name });
+    $("#restore-msg").textContent = "Восстановлено и применено";
+    loadSystemPage();
+  } catch (e) { $("#restore-error").textContent = e.message; }
+});
+
+$("#snapshots").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-snap]");
+  if (!b || !confirm("Вернуть конфигурацию из этого снимка? Текущая версия тоже сохранится в снимках.")) return;
+  try {
+    await api("POST", `/api/system/snapshots/${encodeURIComponent(b.dataset.snap)}/restore`);
+    $("#restore-msg").textContent = "Снимок восстановлен и применён";
+    loadSystemPage();
+  } catch (e) { $("#restore-error").textContent = e.message; }
+});
+
 // ---------------------------------------------------------------- Interfaces
 let interfacesCache = [];
 
@@ -922,6 +1065,7 @@ const pages = {
   "vpn": loadVpn,
   "firewall": loadFirewall,
   "tools": async () => {},          // инструменты обновляются сами, без опроса
+  "system": () => (sysTab === "overview" ? loadSystemPage() : Promise.resolve()),
   "interfaces": loadInterfaces,
   "ip-addresses": loadAddresses,
   "ip-routes": loadRoutes,
@@ -938,9 +1082,122 @@ function show() {
   timer = setInterval(load, page === "ip-addresses" || page === "ip-routes" ? 5000 : 3000);
 }
 
-window.addEventListener("hashchange", show);
-selectVpnTab("wireguard");
-selectFwTab("input");
-selectTool("ping");
-loadSystem().catch(console.error);
-show();
+// ---------------------------------------------------------------- Вход
+let me = null;
+let appStarted = false;
+
+function showLogin() {
+  clearInterval(timer);
+  $("#pwchange").hidden = true;
+  $("#login").hidden = false;
+  $("#login-form").password.focus();
+}
+
+async function checkAuth() {
+  me = await api("GET", "/api/auth/me");
+  if (!me.logged_in) return showLogin();
+  $("#pwchange-cancel").hidden = me.must_change;
+  if (me.must_change) { $("#login").hidden = true; $("#pwchange").hidden = false; return; }
+  $("#login").hidden = true;
+  $("#pwchange").hidden = true;
+  $("#whoami").textContent = `${me.name}${me.role === "read" ? " (просмотр)" : ""}`;
+  setIdentity(me.identity);
+  startApp();
+}
+
+function setIdentity(name) {
+  $("#identity").textContent = name;
+  document.title = `${name} — Ubuntu Router`;
+}
+
+function startApp() {
+  if (appStarted) { show(); return; }
+  appStarted = true;
+  window.addEventListener("hashchange", show);
+  selectVpnTab("wireguard");
+  selectFwTab("input");
+  selectTool("ping");
+  selectSysTab("overview");
+  loadSystem().catch(console.error);
+  show();
+  pollSafeMode();
+  setInterval(pollSafeMode, 3000);
+}
+
+$("#login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#login-error").textContent = "";
+  try {
+    await api("POST", "/api/auth/login", { name: f.name.value, password: f.password.value });
+    f.password.value = "";
+    await checkAuth();
+  } catch (e) { $("#login-error").textContent = e.message; }
+});
+
+$("#pwchange-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  $("#pwchange-error").textContent = "";
+  if (f.new.value !== f.new2.value) { $("#pwchange-error").textContent = "пароли не совпадают"; return; }
+  try {
+    await api("POST", "/api/auth/password", { old: f.old.value, new: f.new.value });
+    f.reset();
+    await checkAuth();
+  } catch (e) { $("#pwchange-error").textContent = e.message; }
+});
+
+$("#pwchange-cancel").addEventListener("click", () => {
+  if (me && me.logged_in && !me.must_change) $("#pwchange").hidden = true;   // при обязательной смене — нельзя
+});
+
+$("#logout").addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  await api("POST", "/api/auth/logout");
+  location.reload();
+});
+
+// ---------------------------------------------------------------- Safe Mode
+let safeActive = false;
+let safeEventShown = null;
+
+async function pollSafeMode() {
+  let st;
+  try { st = await api("GET", "/api/system/safe-mode"); } catch (_) { return; }
+  safeActive = st.active;
+  $("#safe-btn").classList.toggle("on", st.active);
+  $("#safe-btn").textContent = st.active ? "Safe Mode ●" : "Safe Mode";
+  $("#safe-banner").hidden = !st.active;
+  if (st.active) {
+    $("#safe-text").textContent = `включил ${st.user}. Если связь с роутером пропадёт на ${st.timeout} с, `
+      + "конфигурация вернётся к состоянию до включения. Пока страница открыта — связь есть.";
+  }
+  const ev = st.last_event;
+  if (ev && ev.type === "rollback" && ev.time !== safeEventShown) {
+    safeEventShown = ev.time;
+    $("#safe-event").textContent = `Safe Mode: конфигурация откачена (${ev.reason}) — ${new Date(ev.time).toLocaleString()}`;
+    $("#safe-event").hidden = false;
+  }
+}
+
+async function safeStart() {
+  const timeout = Number($("#safe-timeout").value || 60);
+  try { await api("POST", "/api/system/safe-mode", { timeout }); } catch (e) { alert(e.message); }
+  pollSafeMode();
+}
+
+$("#safe-btn").addEventListener("click", async () => {
+  if (safeActive) { try { await api("POST", "/api/system/safe-mode/commit"); } catch (e) { alert(e.message); } }
+  else await safeStart();
+  pollSafeMode();
+});
+$("#safe-start2").addEventListener("click", safeStart);
+$("#safe-commit").addEventListener("click", async () => { await api("POST", "/api/system/safe-mode/commit"); pollSafeMode(); });
+$("#safe-rollback").addEventListener("click", async () => {
+  if (!confirm("Вернуть конфигурацию к состоянию до включения Safe Mode?")) return;
+  await api("POST", "/api/system/safe-mode/rollback");
+  pollSafeMode();
+});
+$("#safe-event").addEventListener("click", () => { $("#safe-event").hidden = true; });
+
+checkAuth().catch((e) => { console.error(e); showLogin(); });
