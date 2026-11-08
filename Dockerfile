@@ -38,6 +38,7 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh app/scripts/*.sh && mkdir -p /var/lib/ubuntu-router
 
 ENV ROUTER_MODE=dev \
+    PYTHONUNBUFFERED=1 \
     API_HOST=0.0.0.0 \
     API_PORT=8000
 
