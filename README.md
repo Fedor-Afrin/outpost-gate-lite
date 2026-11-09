@@ -1,13 +1,15 @@
-# Ubuntu Router
+# OutpostGate
 
-**VPN-шлюз для удалённого сотрудника** на Ubuntu: один WAN в интернет, LAN-порты для
+**VPN-шлюз для удалённого сотрудника** на любом Linux с Docker: один WAN в интернет, LAN-порты для
 телефона и компьютера, туннель в корпоративную сеть (WireGuard / AmneziaWG / L2TP).
 Управление через **FastAPI**, веб-интерфейс и CLI в стиле **MikroTik RouterOS**;
 конфиг как единый источник правды, Safe Mode, встроенные инструменты диагностики.
 
 ## Архитектура
 - **Data plane** — ядро Linux хоста: маршрутизация, nftables, NAT.
-- **Control plane** — Docker: FastAPI, веб-интерфейс, агент применения конфига.
+- **Control plane** — Docker: FastAPI, веб-интерфейс, CLI по SSH, агент применения конфига.
+- Работает на любом Linux с Docker (Debian, Ubuntu, Fedora, Armbian на NanoPi…): сеть делает ядро хоста.
+  Внутри контейнера — Debian (python:3.12-slim).
 
 ## Режимы запуска (один образ)
 | Режим | Где | Сеть | Файл |
@@ -20,8 +22,20 @@
 ```bash
 docker compose up --build
 ```
-- Веб-интерфейс: http://localhost:8000
+- Веб-интерфейс: http://localhost:8000 — пользователь `admin`, пароль пустой (только из локальной сети)
+- CLI в стиле MikroTik: `ssh -p 2222 admin@localhost` или `docker exec -it outpost-gate-dev outpost`
 - Swagger: http://localhost:8000/docs
+
+## CLI
+```
+[admin@office] > /ip address print
+[admin@office] > /ip route
+[admin@office] /ip route> add dst-address=10.0.0.0/8 gateway=192.168.88.254
+[admin@office] /ip route> /ip dhcp-server lease make-static 3
+[admin@office] > /ping 8.8.8.8 count=3
+[admin@office] > /system shell        # bash; назад — exit или Ctrl-D
+```
+`?` — помощь в любом меню, Tab — подсказки, `ssh admin@router "/ip route print"` — одна команда.
 
 ## Дорожная карта
 - [x] Каркас
@@ -31,6 +45,8 @@ docker compose up --build
 - [x] VPN → WireGuard: импорт .conf, full / split, kill switch, NAT или site-to-site
 - [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
 - [x] Firewall: правила в стиле OCI Security Lists (входящие, транзит), проброс портов, счётчики, итоговый nftables
-- [x] Tools: ping, TCP ping, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP + порты), захват пакетов с выгрузкой .pcap
-- [x] System: вход по паролю (роли full / read), пользователи, журнал действий, резервные копии и снимки, Safe Mode, ресурсы, перезапуск
-- [ ] Status, CLI
+- [x] Tools: ping (IPv4/IPv6), сканер портов, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP)
+- [x] System: вход (admin без пароля при первом входе, как MikroTik), роли, пользователи, журнал, резервные копии и снимки, Safe Mode, ресурсы, перезапуск
+- [x] Status: WAN, VPN, LAN, система, трафик интерфейсов
+- [x] CLI в стиле MikroTik по SSH: меню, print с флагами и номерами, Tab, /system shell
+- [ ] Дальше: VLAN, смена MAC, DHCP-опция 66, мониторинг (Prometheus), HTTPS

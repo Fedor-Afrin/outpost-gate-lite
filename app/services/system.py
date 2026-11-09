@@ -104,7 +104,7 @@ def temperature() -> float | None:
 
 
 def identity() -> str:
-    return (store.load().get("system") or {}).get("identity") or "ubuntu-router"
+    return (store.load().get("system") or {}).get("identity") or "outpost-gate"
 
 
 def set_identity(name: str) -> str:
@@ -283,17 +283,18 @@ class SafeMode:
             return self.status()
 
     def _rollback(self, reason: str) -> None:
+        """Режим считается выключенным только ПОСЛЕ того, как конфигурация вернулась."""
         text = self.file().read_text() if self.file().exists() else None
-        self.active = False
-        self.last_event = {"type": "rollback", "reason": reason,
-                           "time": datetime.now().astimezone().isoformat(timespec="seconds")}
         print(f"[safe-mode] ОТКАТ: {reason}")
         audit("safe-mode", "ROLLBACK", reason, 200, "-")
-        if text is not None:
-            try:
+        try:
+            if text is not None:
                 restore_text(text, "Safe Mode")
-            finally:
-                self.file().unlink(missing_ok=True)
+        finally:
+            self.file().unlink(missing_ok=True)
+            self.last_event = {"type": "rollback", "reason": reason,
+                               "time": datetime.now().astimezone().isoformat(timespec="seconds")}
+            self.active = False
 
     def recover_on_startup(self) -> None:
         """Роутер перезапустился посреди Safe Mode — вернуть запомненную конфигурацию до применения."""

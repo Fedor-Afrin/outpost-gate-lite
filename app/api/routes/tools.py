@@ -1,19 +1,17 @@
 """
 Раздел Tools — сетевая диагностика.
 
-  WS   /api/tools/ws            потоковые инструменты: ping, tcp_ping, traceroute, scan, capture
+  WS   /api/tools/ws            потоковые инструменты: ping, port_scan, traceroute, scan
        клиент шлёт  {"tool": "ping", "params": {...}}, затем при желании {"action": "stop"}
        сервер шлёт  {"type": "row"|"info"|"summary"|"error"|"done", ...}
   GET  /api/tools/neighbors     таблица соседей (ARP)
   GET  /api/tools/dns?host=     разрешение имени
   GET  /api/tools/interfaces    интерфейсы для выбора в формах
-  GET  /api/tools/capture.pcap  файл последнего захвата — открыть в Wireshark
 """
 import asyncio
 import contextlib
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
 
 from app.core import auth
 from app.services import netlink, tools
@@ -41,14 +39,6 @@ async def get_dns(host: str = Query(...)):
 def get_interfaces():
     return {"interfaces": sorted(n for n in netlink.link_names() if n != "lo"),
             "scan_network": tools.default_scan_network()}
-
-
-@router.get("/capture.pcap")
-def get_capture():
-    f = tools.capture_file()
-    if not f.exists():
-        raise HTTPException(404, "захвата ещё не было")
-    return FileResponse(f, media_type="application/vnd.tcpdump.pcap", filename="ubuntu-router-capture.pcap")
 
 
 @router.websocket("/ws")

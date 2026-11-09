@@ -26,21 +26,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=awg-go /out/amneziawg-go /usr/local/bin/amneziawg-go
 COPY --from=awg-tools /out/awg /usr/local/bin/awg
 
-WORKDIR /opt/ubuntu-router
+WORKDIR /opt/outpost-gate
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
 COPY web/ web/
-COPY config/router.yaml /etc/ubuntu-router/router.yaml
+COPY config/router.yaml /usr/share/outpost-gate/router.yaml.default
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh app/scripts/*.sh && mkdir -p /var/lib/ubuntu-router
+COPY docker/outpost /usr/local/bin/outpost
+RUN chmod +x /entrypoint.sh /usr/local/bin/outpost app/scripts/*.sh \
+    && mkdir -p /etc/outpost-gate /var/lib/outpost-gate
 
 ENV ROUTER_MODE=dev \
+    CLI_SSH_PORT=22 \
     PYTHONUNBUFFERED=1 \
     API_HOST=0.0.0.0 \
     API_PORT=8000
 
-EXPOSE 8000
+EXPOSE 8000 22
 ENTRYPOINT ["/entrypoint.sh"]

@@ -7,8 +7,8 @@
 services:
   router:
     build: ../..
-    image: ubuntu-router:latest
-    container_name: ubuntu-router
+    image: outpost-gate:latest
+    container_name: outpost-gate
     restart: unless-stopped
     network_mode: host          # реальные интерфейсы сервера
     cap_add:
@@ -18,8 +18,9 @@ services:
       - "c 108:0 rwm"    # /dev/ppp для L2TP (на хосте: sudo modprobe ppp_generic)
     environment:
       ROUTER_MODE: host
-      API_HOST: 192.168.88.1    # слушать ТОЛЬКО LAN-адрес, не WAN!
+      API_HOST: 0.0.0.0         # слушать все адреса; доступ с WAN закрывает фаервол (галочка в LAN)
       API_PORT: "8000"
+      CLI_SSH_PORT: "2222"      # SSH -> CLI роутера; порт 22 оставлен SSH самого сервера
     volumes:
-      - /etc/ubuntu-router:/etc/ubuntu-router
-      - /var/lib/ubuntu-router:/var/lib/ubuntu-router
+      - /etc/outpost-gate:/etc/outpost-gate
+      - /var/lib/outpost-gate:/var/lib/outpost-gate

@@ -2,14 +2,14 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Ubuntu Router</title>
-  <link rel="stylesheet" href="css/style.css?v=0.8.1">
+  <title>OutpostGate</title>
+  <link rel="stylesheet" href="css/style.css?v=0.9.0">
 </head>
 <body>
   <!-- вход -->
   <div id="login" class="overlay" hidden>
     <form id="login-form" class="card login-card">
-      <h2>Ubuntu Router</h2>
+      <h2>OutpostGate</h2>
       <p class="hint">Войдите, чтобы управлять роутером.</p>
       <label>Пользователь <input name="name" autocomplete="username" value="admin" required></label>
       <label>Пароль <input name="password" type="password" autocomplete="current-password"></label>
@@ -34,10 +34,10 @@
   </div>
 
   <aside>
-    <h2 id="identity">Ubuntu Router</h2>
+    <h2 id="identity">OutpostGate</h2>
     <button type="button" id="safe-btn" class="safe-btn" title="Safe Mode: откат, если связь с роутером пропадёт">Safe Mode</button>
     <nav>
-      <a class="disabled">Status</a>
+      <a href="#status" data-page="status">Status</a>
       <a href="#wan" data-page="wan">WAN</a>
       <a href="#lan" data-page="lan">LAN</a>
       <a href="#vpn" data-page="vpn">VPN</a>
@@ -64,6 +64,24 @@
       Пароль администратора <b>не задан</b>: войти может любой из локальной сети.
       <button type="button" id="nopw-set">Задать пароль</button>
     </div>
+    <!-- Status -->
+    <section id="page-status" class="page">
+      <h1>Status</h1>
+      <div class="status-cards">
+        <div class="card scard" id="st-wan"></div>
+        <div class="card scard" id="st-vpn"></div>
+        <div class="card scard" id="st-lan"></div>
+        <div class="card scard" id="st-sys"></div>
+      </div>
+      <div class="card wide">
+        <h2>Трафик интерфейсов</h2>
+        <table class="compact">
+          <thead><tr><th>Интерфейс</th><th>Роль</th><th>Линк</th><th>↓ Сейчас</th><th>↑ Сейчас</th><th>↓ Всего</th><th>↑ Всего</th></tr></thead>
+          <tbody id="st-traffic"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- WAN -->
     <section id="page-wan" class="page">
       <h1>WAN</h1>
@@ -409,7 +427,7 @@
 
       <!-- итоговый ruleset -->
       <div id="fw-ruleset-panel" hidden>
-        <p class="hint">Так выглядит таблица <code>inet ubuntu_router</code>, которую роутер собирает из ваших
+        <p class="hint">Так выглядит таблица <code>inet outpost_gate</code>, которую роутер собирает из ваших
           и системных правил и применяет атомарно командой <code>nft -f</code>.</p>
         <pre id="fw-ruleset" class="code"></pre>
       </div>
@@ -420,35 +438,29 @@
       <h1>Tools</h1>
       <div class="tabs" id="tool-tabs">
         <a class="tab" data-tool="ping">Ping</a>
-        <a class="tab" data-tool="tcp_ping">TCP Ping</a>
+        <a class="tab" data-tool="port_scan">Сканер портов</a>
         <a class="tab" data-tool="traceroute">Traceroute</a>
         <a class="tab" data-tool="dns">DNS</a>
         <a class="tab" data-tool="neighbors">Соседи (ARP)</a>
         <a class="tab" data-tool="scan">Сканер сети</a>
-        <a class="tab" data-tool="capture">Захват пакетов</a>
       </div>
 
       <form id="tool-form" class="card tool-form">
         <p class="hint" id="tool-hint"></p>
         <div class="tool-fields">
           <label data-f="host">Адрес или имя <input name="host" placeholder="8.8.8.8 или example.com"></label>
-          <label data-f="port">Порт <input name="port" type="number" min="1" max="65535" value="443"></label>
-          <label data-f="count">Количество <input name="count" type="number" min="1" max="2000" value="4"></label>
-          <label data-f="size">Размер, байт <input name="size" type="number" min="8" max="1472" value="56"></label>
-          <label data-f="method">Метод
-            <select name="method"><option value="udp">UDP (по умолчанию)</option><option value="icmp">ICMP</option>
-              <option value="tcp">TCP (на порт)</option></select></label>
+          <label data-f="family" class="seg">Протокол
+            <span class="segmented"><label><input type="radio" name="family" value="4" checked> IPv4</label>
+              <label><input type="radio" name="family" value="6"> IPv6</label></span></label>
+          <label data-f="count">Количество <input name="count" type="number" min="1" max="100" value="4"></label>
+          <label data-f="ports">Порты <input name="ports" placeholder="22, 80, 443 или 1-1024" value="22, 80, 443, 8000, 8291"></label>
           <label data-f="max_hops">Макс. хопов <input name="max_hops" type="number" min="1" max="64" value="30"></label>
           <label data-f="network">Сеть <input name="network" placeholder="192.168.88.0/24"></label>
-          <label data-f="ports">TCP-порты <input name="ports" placeholder="22, 80, 443, 5060"></label>
           <label data-f="interface">Интерфейс <select name="interface"></select></label>
-          <label data-f="seconds">Секунд, не больше <input name="seconds" type="number" min="1" max="120" value="30"></label>
-          <label data-f="filter" class="wide">Фильтр (BPF) <input name="filter" placeholder="host 192.168.88.20 and port 5060"></label>
         </div>
         <div class="toolbar">
           <button type="submit" id="tool-start">Старт</button>
           <button type="button" id="tool-stop" disabled>Стоп</button>
-          <a id="tool-pcap" href="/api/tools/capture.pcap" hidden>⬇ Скачать .pcap для Wireshark</a>
           <span id="tool-status" class="hint"></span>
           <span id="tool-error" class="error"></span>
         </div>
@@ -601,6 +613,6 @@
     </section>
   </main>
 
-  <script src="js/app.js?v=0.8.1"></script>
+  <script src="js/app.js?v=0.9.0"></script>
 </body>
 </html>

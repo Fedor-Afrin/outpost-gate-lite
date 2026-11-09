@@ -122,7 +122,7 @@ def test_firewall_ruleset():
     assert 'oifname "eth1" masquerade' in rs
     assert 'iifname "br-lan" oifname "eth1" accept' in rs
     assert "policy drop" in rs and "tcp dport { 22, 8000 } accept" in rs
-    assert rs.index("delete table inet ubuntu_router") < rs.index("table inet ubuntu_router {")
+    assert rs.index("delete table inet outpost_gate") < rs.index("table inet outpost_gate {")
     assert "tcp dport" not in firewall.ruleset("eth1", "br-lan", wan_management=False)
 
 
