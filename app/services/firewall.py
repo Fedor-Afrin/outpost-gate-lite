@@ -1,7 +1,7 @@
 """
 Фаервол и NAT (nftables).
 
-Свою таблицу `inet ubuntu_router` роутер генерирует целиком и применяет
+Свою таблицу `inet outpost_gate` роутер генерирует целиком и применяет
 атомарно (`nft -f`): либо применяется вся, либо ничего. Чужие таблицы
 (Docker, системные) не трогаются.
 
@@ -25,8 +25,8 @@ from dataclasses import dataclass
 
 from app.models.firewall import FirewallRule, PortForward, port_set
 
-TABLE = "ubuntu_router"
-SSH_PORT = 22
+TABLE = "outpost_gate"
+LEGACY_TABLE = "ubuntu_router"     # таблица под прежним названием проекта — удаляется
 I = " " * 8
 
 
@@ -44,7 +44,8 @@ class VpnRules:
 
 
 def management_ports() -> list[int]:
-    return sorted({int(os.getenv("API_PORT", "8000")), SSH_PORT})
+    """Веб/API и SSH-доступ к CLI роутера."""
+    return sorted({int(os.getenv("API_PORT", "8000")), int(os.getenv("CLI_SSH_PORT", "22"))})
 
 
 # --- правила пользователя -> nft ------------------------------------------------------
@@ -124,7 +125,9 @@ def ruleset(wan: str, lan: str, wan_management: bool, vpn: VpnRules | None = Non
         post += f'{I}oifname "{vpn.iface}" masquerade\n'
 
     user_in_block = user_in and f"{I}# --- правила пользователя ---\n{user_in}{I}# --- системные ---\n"
-    return f"""# сгенерировано Ubuntu Router — не редактировать вручную
+    return f"""# сгенерировано OutpostGate — не редактировать вручную
+add table inet {LEGACY_TABLE}
+delete table inet {LEGACY_TABLE}
 add table inet {TABLE}
 delete table inet {TABLE}
 
@@ -231,6 +234,7 @@ def refresh(lan_cfg=None) -> None:
 
 def remove() -> None:
     try:
+        _nft(["delete", "table", "inet", LEGACY_TABLE])
         _nft(["delete", "table", "inet", TABLE])
     except FirewallError:
         pass

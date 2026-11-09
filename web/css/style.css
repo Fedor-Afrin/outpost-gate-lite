@@ -1,3 +1,6 @@
+/* Скрытое скрыто всегда — даже если у элемента свой display (flex/grid) */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 body { margin: 0; display: flex; font-family: system-ui, sans-serif; background: #f4f5f7; color: #222; }
 
@@ -137,3 +140,19 @@ a.button { padding: 5px 10px; border: 1px solid #c8ced6; border-radius: 4px; bac
 .nopw-banner { background: #fdecec; border: 1px solid #f0b4b4; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
                font-size: 14px; display: flex; gap: 10px; align-items: center; }
 .nopw-banner[hidden] { display: none; }
+.segmented { display: inline-flex; border: 1px solid #c8ced6; border-radius: 4px; overflow: hidden; }
+.segmented label { flex-direction: row !important; align-items: center; gap: 4px !important; padding: 6px 10px;
+                   font-size: 14px; color: #222 !important; cursor: pointer; }
+.segmented label:has(input:checked) { background: #2b3a4a; color: #fff !important; }
+.segmented input { display: none; }
+
+/* --- Status --- */
+.status-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; max-width: 1100px; margin-bottom: 16px; }
+.scard { margin: 0; max-width: none; }
+.scard h2 { display: flex; align-items: center; gap: 8px; }
+.scard .more { margin-left: auto; font-size: 12px; font-weight: normal; color: #3d5166; text-decoration: none; }
+.kv { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 3px 0; border-bottom: 1px dashed #eef1f4; }
+.kv span { color: #6b7480; }
+.kv b { font-weight: 500; text-align: right; word-break: break-word; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #c8ced6; display: inline-block; }
+.dot.ok { background: #1a7f37; } .dot.bad { background: #b42318; } .dot.off { background: #c8ced6; }

@@ -27,6 +27,8 @@ def test_parse_ping():
     assert tools.parse_ping_line("rtt min/avg/max/mdev = 11.1/12.4/13.8/0.9 ms")["data"]["avg"] == 12.4
     assert tools.parse_ping_line("ping: nosuch.host: Name or service not known")["type"] == "error"
     assert tools.parse_ping_line("PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.") is None
+    v6 = tools.parse_ping_line("64 bytes from 2a00:1450:4028:80c::200e: icmp_seq=1 ttl=117 time=9.8 ms")
+    assert v6["row"]["from"] == "2a00:1450:4028:80c::200e" and v6["row"]["time_ms"] == 9.8
 
 
 def test_parse_traceroute():
@@ -37,21 +39,6 @@ def test_parse_traceroute():
     assert tools.parse_traceroute_line(" 7  * * *")["times"] == [None, None, None]
     assert tools.parse_traceroute_line(" 9  10.0.0.1  5.0 ms !H  5.1 ms !H  * ")["notes"] == ["!H", "!H"]
     assert tools.parse_traceroute_line("traceroute to 8.8.8.8 (8.8.8.8), 30 hops max") is None
-
-
-def test_parse_tcpdump():
-    sip = tools.parse_tcpdump_line("12:34:56.789012 br-lan In  IP 192.168.88.20.5060 > 10.0.0.1.5060: SIP: REGISTER")
-    assert sip["interface"] == "br-lan" and sip["direction"] == "In"
-    assert (sip["src"], sip["dst"], sip["proto"]) == ("192.168.88.20:5060", "10.0.0.1:5060", "SIP")
-    tcp = tools.parse_tcpdump_line("12:34:56.1 IP 192.168.88.20.51234 > 93.184.216.34.443: Flags [S], seq 1, length 0")
-    assert tcp["proto"] == "TCP" and tcp["info"].startswith("Flags")
-    icmp = tools.parse_tcpdump_line("12:34:56.2 IP 192.168.88.20 > 8.8.8.8: ICMP echo request, id 1, seq 1, length 64")
-    assert icmp["proto"] == "ICMP" and icmp["dst"] == "8.8.8.8"
-    arp = tools.parse_tcpdump_line("12:34:56.3 ARP, Request who-has 192.168.88.1 tell 192.168.88.20, length 28")
-    assert arp["proto"] == "ARP" and arp["info"] == "Request who-has 192.168.88.1 tell 192.168.88.20"
-    dns = tools.parse_tcpdump_line("12:34:56.4 IP 192.168.88.20.40000 > 192.168.88.1.53: 1234+ A? example.com. (29)")
-    assert dns["proto"] == "DNS"
-    assert tools.parse_tcpdump_line("listening on any, link-type LINUX_SLL2") is None
 
 
 def test_parse_neighbors():
@@ -69,12 +56,13 @@ def test_input_validation():
         with pytest.raises(tools.ToolError):
             tools.check_host(bad)
     assert tools.parse_ports("22, 80,5060-5062") == [22, 80, 5060, 5061, 5062]
-    with pytest.raises(tools.ToolError):
-        tools.parse_ports("1-100")                                           # больше 32 портов
+    assert len(tools.parse_ports("1-1024")) == 1024
+    for bad in ("1-2000", "100-50", "70000", "abc"):
+        with pytest.raises(tools.ToolError):
+            tools.parse_ports(bad)
     with pytest.raises(tools.ToolError):
         tools.check_int(0, 1, 10, "x")
-    with pytest.raises(tools.ToolError, match="BPF"):
-        collect(tools.capture({"filter": "port 53 -w /etc/passwd"}))
+    assert set(tools.TOOLS) == {"ping", "port_scan", "traceroute", "scan"}   # захвата пакетов больше нет
     with pytest.raises(tools.ToolError, match="/22"):
         collect(tools.scan({"network": "10.0.0.0/16"}))
 
@@ -87,27 +75,26 @@ def test_run_lines_and_timeout():
     assert slow == ["x"]                                                     # процесс убит по таймауту
 
 
-def test_tcp_probe_and_tcp_ping(monkeypatch):
+def test_tcp_probe_and_port_scan():
     async def go():
         server = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
         open_ = await tools.tcp_probe("127.0.0.1", port)
+        events = [ev async for ev in tools.port_scan({"host": "localhost", "ports": f"{port}, {port + 1}"})]
         server.close()
         await server.wait_closed()
         closed = await tools.tcp_probe("127.0.0.1", port)
-        return open_, closed, port
-    (st_open, t_open), (st_closed, _), port = asyncio.run(go())
+        return open_, closed, port, events
+    (st_open, t_open), (st_closed, _), port, events = asyncio.run(go())
     assert st_open == "open" and t_open is not None and st_closed == "closed"
-
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(tools.asyncio, "sleep", lambda s: real_sleep(0))   # без пауз между попытками
-    events = collect(tools.tcp_ping({"host": "127.0.0.1", "port": port, "count": 2}))
-    assert [e["row"]["status"] for e in events if e["type"] == "row"] == ["closed", "closed"]
-    assert events[-1]["data"]["loss"] == 100.0
+    rows = {e["row"]["port"]: e["row"]["status"] for e in events if e["type"] == "row"}
+    assert rows[port] == "open"
+    summary = events[-1]["data"]
+    assert summary["ip"] in ("127.0.0.1", "::1") and summary["open"] == 1 and summary["scanned"] == 2
 
 
 def test_scan_ping_plus_arp(monkeypatch):
-    async def fake_ping(ip):
+    async def fake_ping(ip, iface=None):
         return 1.5 if ip == "192.168.88.10" else None
     monkeypatch.setattr(tools, "_ping_once", fake_ping)
     monkeypatch.setattr(tools, "neighbors", lambda: [
@@ -121,3 +108,15 @@ def test_scan_ping_plus_arp(monkeypatch):
     assert [(r["ip"], r["source"]) for r in rows] == [("192.168.88.10", "ping"), ("192.168.88.11", "arp")]
     assert rows[0]["name"] == "GXP" and rows[0]["ping_ms"] == 1.5
     assert events[-1]["data"] == {"network": "192.168.88.0/28", "scanned": 14, "found": 2}
+
+
+def test_scan_filters_by_interface(monkeypatch):
+    async def fake_ping(ip, iface=None):
+        assert iface == "br-lan"
+        return None
+    monkeypatch.setattr(tools, "_ping_once", fake_ping)
+    monkeypatch.setattr(tools, "neighbors", lambda: [
+        {"ip": "192.168.88.11", "mac": "aa:00:00:00:00:01", "vendor": None, "name": None, "interface": "br-lan", "state": "STALE"},
+        {"ip": "192.168.88.12", "mac": "aa:00:00:00:00:02", "vendor": None, "name": None, "interface": "eth0", "state": "STALE"}])
+    events = collect(tools.scan({"network": "192.168.88.0/28", "interface": "br-lan"}))
+    assert [e["row"]["ip"] for e in events if e["type"] == "row"] == ["192.168.88.11"]

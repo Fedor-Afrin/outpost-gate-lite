@@ -10,8 +10,8 @@ class Settings:
     # gns3   — изолированный контейнер внутри GNS3
     # dev    — разработка на рабочем ПК (свой namespace, хост не трогается)
     mode: str = os.getenv("ROUTER_MODE", "dev")
-    config_file: str = os.getenv("ROUTER_CONFIG", "/etc/ubuntu-router/router.yaml")
-    data_dir: str = os.getenv("ROUTER_DATA", "/var/lib/ubuntu-router")
+    config_file: str = os.getenv("ROUTER_CONFIG", "/etc/outpost-gate/router.yaml")
+    data_dir: str = os.getenv("ROUTER_DATA", "/var/lib/outpost-gate")
     log_level: str = os.getenv("LOG_LEVEL", "info")
 
 

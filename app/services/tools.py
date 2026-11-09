@@ -1,13 +1,13 @@
 """
 Tools — сетевая диагностика (без Nmap: только стандартные утилиты и свой код).
 
-  ping        — ICMP (iputils ping)
-  tcp_ping    — время установления TCP-соединения с host:port (свой код)
-  traceroute  — маршрут до узла (UDP, ICMP или TCP)
+  ping        — ICMP, IPv4 или IPv6 (iputils ping)
+  port_scan   — сканер TCP-портов узла (свой код: подключение к каждому порту)
+  traceroute  — маршрут до узла (ICMP)
   dns         — разрешение имени через DNS роутера
   neighbors   — таблица соседей (ARP): IP, MAC, производитель, имя из DHCP
-  scan        — сканер подсети: ping-обход + ARP (видит и тех, кто не отвечает на ping) + TCP-порты
-  capture     — захват пакетов tcpdump: строки в реальном времени + файл .pcap для Wireshark
+  scan        — сканер подсети: ping-обход + ARP (видит и тех, кто не отвечает на ping)
+У каждого инструмента (кроме DNS и соседей) можно выбрать интерфейс.
 
 Потоковые инструменты — асинхронные генераторы событий:
   {"type": "row", "row": {...}}      строка таблицы
@@ -21,21 +21,21 @@ import asyncio
 import ipaddress
 import json
 import re
-import shlex
 import socket
 import subprocess
 import time
-from pathlib import Path
 from typing import AsyncIterator
 
-from app.core.config import settings
 from app.services import oui
 
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,15}$")
 MAX_SCAN_HOSTS = 1024
-MAX_CAPTURE_PACKETS = 2000
-MAX_CAPTURE_SECONDS = 120
+MAX_SCAN_PORTS = 1024
+SERVICES = {21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP", 110: "POP3", 139: "NetBIOS",
+            143: "IMAP", 443: "HTTPS", 445: "SMB", 554: "RTSP", 993: "IMAPS", 995: "POP3S", 1723: "PPTP",
+            2000: "MikroTik", 3306: "MySQL", 3389: "RDP", 5060: "SIP", 5061: "SIP-TLS", 5432: "PostgreSQL",
+            5900: "VNC", 8000: "HTTP-alt", 8080: "HTTP-proxy", 8291: "Winbox", 8443: "HTTPS-alt", 8728: "RouterOS API"}
 
 
 class ToolError(Exception):
@@ -68,14 +68,18 @@ def check_iface(iface: str | None) -> str | None:
     return iface
 
 
-def parse_ports(text: str | None, limit: int = 32) -> list[int]:
+def parse_ports(text: str | None, limit: int = MAX_SCAN_PORTS) -> list[int]:
     ports: list[int] = []
     for item in (text or "").replace(" ", "").split(","):
         if not item:
             continue
         if "-" in item:
             a, b = (check_int(x, 1, 65535, "порт") for x in item.split("-", 1))
+            if b < a:
+                raise ToolError(f"диапазон портов {item}: начало больше конца")
             ports += list(range(a, b + 1))
+            if len(ports) > limit:
+                raise ToolError(f"не больше {limit} портов за раз")
         else:
             ports.append(check_int(item, 1, 65535, "порт"))
     if len(ports) > limit:
@@ -111,9 +115,9 @@ async def run_lines(cmd: list[str], timeout: float) -> AsyncIterator[str]:
 
 
 # --- ping ------------------------------------------------------------------------------------
-PING_REPLY = re.compile(r"from ([\d.]+).*icmp_seq=(\d+) ttl=(\d+) time=([\d.]+) ms")
+PING_REPLY = re.compile(r"from (\S+?):? icmp_seq=(\d+) (?:ttl|hlim)=(\d+) time=([\d.]+) ms")
 PING_LOST = re.compile(r"no answer yet for icmp_seq=(\d+)")
-PING_ERR = re.compile(r"From ([\d.]+) icmp_seq=(\d+) (.+)")
+PING_ERR = re.compile(r"From (\S+?):? icmp_seq=(\d+) (.+)")
 PING_STATS = re.compile(r"(\d+) packets transmitted, (\d+) received.*?([\d.]+)% packet loss")
 PING_RTT = re.compile(r"= ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms")
 
@@ -138,8 +142,8 @@ def parse_ping_line(line: str) -> dict | None:
 async def ping(params: dict) -> AsyncIterator[dict]:
     host = check_host(params.get("host"))
     count = check_int(params.get("count", 4), 1, 100, "количество")
-    size = check_int(params.get("size", 56), 8, 1472, "размер")
-    cmd = ["ping", "-n", "-O", "-c", str(count), "-W", "2", "-i", "0.5", "-s", str(size)]
+    family = "-6" if str(params.get("family", "4")) == "6" else "-4"
+    cmd = ["ping", family, "-n", "-O", "-c", str(count), "-W", "2", "-i", "0.5"]
     if iface := check_iface(params.get("interface")):
         cmd += ["-I", iface]
     async for line in run_lines(cmd + [host], timeout=count * 0.5 + 5):
@@ -147,43 +151,67 @@ async def ping(params: dict) -> AsyncIterator[dict]:
             yield ev
 
 
-# --- TCP ping ----------------------------------------------------------------------------------
-async def tcp_probe(host: str, port: int, timeout: float = 2.0) -> tuple[str, float | None]:
-    """('open' | 'closed' | 'timeout' | ошибка, время мс)."""
+# --- TCP: проверка порта и сканер портов --------------------------------------------------------
+async def resolve(host: str) -> str:
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise ToolError(f"не удалось разрешить имя {host}: {e.strerror}") from e
+    return sorted(infos, key=lambda i: i[0] != socket.AF_INET)[0][4][0]   # IPv4 в приоритете
+
+
+async def tcp_probe(host: str, port: int, timeout: float = 2.0, iface: str | None = None) -> tuple[str, float | None]:
+    """('open' | 'closed' | 'filtered' | ошибка, время мс). iface — отправить через этот интерфейс."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.setblocking(False)
+    loop = asyncio.get_running_loop()
     start = time.perf_counter()
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        if iface:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+        await asyncio.wait_for(loop.sock_connect(sock, (host, port)), timeout=timeout)
+        return "open", round((time.perf_counter() - start) * 1000, 2)
     except asyncio.TimeoutError:
-        return "timeout", None
+        return "filtered", None                      # нет ответа: порт закрыт фаерволом или узла нет
     except ConnectionRefusedError:
         return "closed", round((time.perf_counter() - start) * 1000, 2)
     except OSError as e:
         return e.strerror or str(e), None
-    ms = round((time.perf_counter() - start) * 1000, 2)
-    writer.close()
-    try:
-        await writer.wait_closed()
-    except OSError:
-        pass
-    return "open", ms
+    finally:
+        sock.close()
 
 
-async def tcp_ping(params: dict) -> AsyncIterator[dict]:
+async def port_scan(params: dict) -> AsyncIterator[dict]:
     host = check_host(params.get("host"))
-    port = check_int(params.get("port", 443), 1, 65535, "порт")
-    count = check_int(params.get("count", 4), 1, 100, "количество")
-    times = []
-    for seq in range(1, count + 1):
-        status, ms = await tcp_probe(host, port)
-        if ms is not None and status == "open":
-            times.append(ms)
-        yield {"type": "row", "row": {"seq": seq, "port": port, "status": status, "time_ms": ms}}
-        if seq < count:
-            await asyncio.sleep(1)
-    yield {"type": "summary", "data": {"sent": count, "received": len(times),
-                                       "loss": round(100 * (count - len(times)) / count, 1),
-                                       **({"min": min(times), "avg": round(sum(times) / len(times), 2),
-                                           "max": max(times)} if times else {})}}
+    ports = parse_ports(params.get("ports") or "22, 80, 443")
+    if not ports:
+        raise ToolError("укажите порты: 22, 80, 443 или диапазон 1-1024")
+    iface = check_iface(params.get("interface"))
+    ip = await resolve(host)
+    show_all = len(ports) <= 64            # на больших диапазонах — только открытые
+    yield {"type": "info", "text": f"Сканирую {host}" + (f" ({ip})" if ip != host else "")
+                                   + f": {len(ports)} портов" + ("" if show_all else ", показываю только открытые")}
+    sem = asyncio.Semaphore(100)
+    counts = {"open": 0, "closed": 0, "filtered": 0}
+
+    async def probe(port: int):
+        async with sem:
+            return port, await tcp_probe(ip, port, 1.5, iface)
+
+    for fut in asyncio.as_completed([probe(p) for p in ports]):
+        port, (status, ms) = await fut
+        counts[status if status in counts else "filtered"] += 1
+        if show_all or status == "open":
+            yield {"type": "row", "row": {"port": port, "service": SERVICES.get(port), "status": status,
+                                          "time_ms": ms}}
+    yield {"type": "summary", "data": {"host": host, "ip": ip, "scanned": len(ports), **counts}}
 
 
 # --- traceroute -----------------------------------------------------------------------------------
@@ -216,12 +244,7 @@ def parse_traceroute_line(line: str) -> dict | None:
 async def traceroute(params: dict) -> AsyncIterator[dict]:
     host = check_host(params.get("host"))
     max_hops = check_int(params.get("max_hops", 30), 1, 64, "максимум хопов")
-    method = params.get("method", "udp")
-    cmd = ["traceroute", "-n", "-q", "3", "-w", "2", "-m", str(max_hops)]
-    if method == "icmp":
-        cmd.append("-I")
-    elif method == "tcp":
-        cmd += ["-T", "-p", str(check_int(params.get("port", 443), 1, 65535, "порт"))]
+    cmd = ["traceroute", "-I", "-n", "-q", "3", "-w", "2", "-m", str(max_hops)]   # ICMP
     if iface := check_iface(params.get("interface")):
         cmd += ["-i", iface]
     async for line in run_lines(cmd + [host], timeout=max_hops * 7 + 5):
@@ -285,10 +308,10 @@ def neighbors() -> list[dict]:
 
 
 # --- сканер подсети -------------------------------------------------------------------------------
-async def _ping_once(ip: str) -> float | None:
+async def _ping_once(ip: str, iface: str | None = None) -> float | None:
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ping", "-n", "-c", "1", "-W", "1", ip,
+            "ping", "-n", "-c", "1", "-W", "1", *(["-I", iface] if iface else []), ip,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     except FileNotFoundError as e:
         raise ToolError("нет программы ping") from e
@@ -313,17 +336,16 @@ async def scan(params: dict) -> AsyncIterator[dict]:
         raise ToolError("укажите сеть, например 192.168.88.0/24") from e
     if net.version != 4 or net.num_addresses > MAX_SCAN_HOSTS + 2:
         raise ToolError(f"сеть IPv4 не больше {MAX_SCAN_HOSTS} адресов (/22)")
-    ports = parse_ports(params.get("ports"))
+    iface = check_iface(params.get("interface"))
     hosts = [str(h) for h in net.hosts()]
-    yield {"type": "info", "text": f"Сканирую {net}: {len(hosts)} адресов"
-                                   + (f", порты {', '.join(map(str, ports))}" if ports else "")}
+    yield {"type": "info", "text": f"Сканирую {net}: {len(hosts)} адресов" + (f" через {iface}" if iface else "")}
 
     found: dict[str, dict] = {}
     sem = asyncio.Semaphore(64)
 
     async def probe(ip: str):
         async with sem:
-            return ip, await _ping_once(ip)
+            return ip, await _ping_once(ip, iface)
 
     # 1) ping-обход — заодно ядро разошлёт ARP-запросы всем адресам
     for fut in asyncio.as_completed([probe(ip) for ip in hosts]):
@@ -338,88 +360,15 @@ async def scan(params: dict) -> AsyncIterator[dict]:
     except ToolError:
         neigh = []
     for n in neigh:
+        if iface and n["interface"] != iface:
+            continue
         if n["mac"] and ipaddress.ip_address(n["ip"]) in net and n["state"] not in ("FAILED", "INCOMPLETE"):
             row = found.setdefault(n["ip"], {"ip": n["ip"], "ping_ms": None, "source": "arp"})
             row.update(mac=n["mac"], vendor=n["vendor"], name=n["name"], interface=n["interface"])
 
-    # 3) TCP-порты найденных устройств
     for ip in sorted(found, key=lambda a: tuple(int(p) for p in a.split("."))):
-        row = found[ip]
-        if ports:
-            results = await asyncio.gather(*(tcp_probe(ip, p, 1.0) for p in ports))
-            row["open_ports"] = [p for p, (st, _) in zip(ports, results) if st == "open"]
-        yield {"type": "row", "row": row}
+        yield {"type": "row", "row": found[ip]}
     yield {"type": "summary", "data": {"network": str(net), "scanned": len(hosts), "found": len(found)}}
 
 
-# --- захват пакетов --------------------------------------------------------------------------------
-TCPDUMP_LINE = re.compile(
-    r"^(?P<time>\d{2}:\d{2}:\d{2}\.\d+)\s+(?:(?P<iface>\S+)\s+(?P<dir>In|Out|M|P|B)\s+)?"
-    r"(?P<l3>IP6?|ARP|LLDP|STP)?,?\s*(?P<rest>.*)$")
-
-
-def _split_addr(addr: str) -> tuple[str, str | None]:
-    """'192.168.88.20.5060' -> ('192.168.88.20', '5060')"""
-    parts = addr.rstrip(":").split(".")
-    if len(parts) == 5:
-        return ".".join(parts[:4]), parts[4]
-    return addr.rstrip(":"), None
-
-
-def parse_tcpdump_line(line: str) -> dict | None:
-    m = TCPDUMP_LINE.match(line)
-    if not m or not m["time"]:
-        return None
-    row = {"time": m["time"], "interface": m["iface"], "direction": m["dir"], "proto": m["l3"] or "?",
-           "src": None, "dst": None, "info": m["rest"]}
-    rest = m["rest"]
-    if m["l3"] in ("IP", "IP6") and " > " in rest:
-        src, _, tail = rest.partition(" > ")
-        dst, _, info = tail.partition(": ")
-        (s_ip, s_port), (d_ip, d_port) = _split_addr(src), _split_addr(dst)
-        row.update(src=s_ip + (f":{s_port}" if s_port else ""), dst=d_ip + (f":{d_port}" if d_port else ""),
-                   info=info)
-        low = info.lower()
-        if info.startswith("Flags"):
-            row["proto"] = "TCP"
-        elif low.startswith("icmp"):
-            row["proto"] = "ICMP"
-        elif "udp" in low or (s_port and d_port):
-            row["proto"] = "UDP"
-        for port, name in (("53", "DNS"), ("67", "DHCP"), ("68", "DHCP"), ("5060", "SIP"),
-                           ("51820", "WireGuard"), ("500", "IKE"), ("4500", "IPsec"), ("1701", "L2TP")):
-            if port in (s_port, d_port):
-                row["proto"] = name
-                break
-    elif m["l3"] == "ARP":
-        row["info"] = rest.split(", length")[0]
-    return row
-
-
-def capture_file() -> Path:
-    return Path(settings.data_dir) / "capture.pcap"
-
-
-async def capture(params: dict) -> AsyncIterator[dict]:
-    iface = check_iface(params.get("interface")) or "any"
-    count = check_int(params.get("count", 200), 1, MAX_CAPTURE_PACKETS, "пакетов")
-    seconds = check_int(params.get("seconds", 30), 1, MAX_CAPTURE_SECONDS, "секунд")
-    filt = shlex.split(params.get("filter") or "")
-    if any(t.startswith("-") for t in filt):
-        raise ToolError("фильтр — выражение BPF без ключей, например: host 192.168.88.20 and port 5060")
-    out = capture_file()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["tcpdump", "-i", iface, "-n", "-l", "-U", "-c", str(count), "-w", str(out), "--print", "--", *filt]
-    yield {"type": "info", "text": f"tcpdump на {iface}: до {count} пакетов или {seconds} с"
-                                   + (f", фильтр: {' '.join(filt)}" if filt else "")}
-    packets = 0
-    async for line in run_lines(cmd, timeout=seconds):
-        if row := parse_tcpdump_line(line):
-            packets += 1
-            yield {"type": "row", "row": row}
-        elif line.startswith("tcpdump:") and ("error" in line or "syntax" in line or "No such" in line):
-            yield {"type": "error", "text": line}
-    yield {"type": "summary", "data": {"packets": packets, "pcap": out.exists() and out.stat().st_size > 24}}
-
-
-TOOLS = {"ping": ping, "tcp_ping": tcp_ping, "traceroute": traceroute, "scan": scan, "capture": capture}
+TOOLS = {"ping": ping, "port_scan": port_scan, "traceroute": traceroute, "scan": scan}

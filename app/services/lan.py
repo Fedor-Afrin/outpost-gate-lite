@@ -69,7 +69,7 @@ def get_config() -> LanConfig:
 def dnsmasq_conf(cfg: LanConfig, leases_file: str, resolv_file: str, hosts_file: str = "") -> str:
     iface = ipaddress.ip_interface(cfg.address)
     lines = [
-        "# сгенерировано Ubuntu Router — не редактировать вручную",
+        "# сгенерировано OutpostGate — не редактировать вручную",
         "keep-in-foreground",
         "log-facility=-",            # журнал — в docker logs
         "pid-file=",

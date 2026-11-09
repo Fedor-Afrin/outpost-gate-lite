@@ -38,6 +38,78 @@ async function loadSystem() {
     `${esc(s.hostname)}<br>kernel ${esc(s.kernel)}<br>mode: ${esc(s.mode)}<br>ip_forward: ${s.ip_forward ? "on" : "off"}`;
 }
 
+// ---------------------------------------------------------------- Status
+let lastTraffic = null;   // прошлый замер — для скорости
+const rate = (bytes, sec) => sec > 0 ? `${fmt(bytes / sec)}/с` : "—";
+
+function scard(title, ok, lines, link) {
+  const dot = ok === true ? "ok" : ok === false ? "bad" : "off";
+  return `<h2><span class="dot ${dot}"></span>${title}<a class="more" href="#${link}">настроить →</a></h2>`
+    + lines.filter(Boolean).map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join("");
+}
+
+async function loadStatus() {
+  const s = await api("GET", "/api/status");
+  const w = s.wan, v = s.vpn, l = s.lan, y = s.system;
+
+  $("#st-wan").innerHTML = w.error ? scard("WAN", false, [["Ошибка", esc(w.error)]], "wan")
+    : scard("WAN", w.link_up && w.addresses.length > 0 && !!w.gateway, [
+        ["Интерфейс", `${esc(w.interface ?? "—")} · ${w.link_up ? "кабель есть" : "нет кабеля"}`],
+        ["Режим", { dhcp: "DHCP", static: "вручную", none: "не настраивается" }[w.mode] ?? w.mode],
+        ["Адрес", w.addresses.map(esc).join(", ") || "—"],
+        ["Шлюз", esc(w.gateway ?? "—")],
+        ["DNS", esc(w.dns.join(", ") || "—")],
+      ], "wan");
+
+  const vpnName = { wireguard: "WireGuard", amneziawg: "AmneziaWG", l2tp: "L2TP/IPsec" };
+  $("#st-vpn").innerHTML = v.error ? scard("VPN", false, [["Ошибка", esc(v.error)]], "vpn")
+    : !v.enabled ? scard("VPN", null, [["Туннель", "выключен"]], "vpn")
+    : scard(`VPN · ${vpnName[v.enabled]}`, v.connected, [
+        ["Состояние", v.connected ? "подключён" : "нет связи с сервером"],
+        ["Сервер", esc(v.endpoint ?? "—")],
+        ["Адрес в туннеле", esc(v.tunnel_ip ?? "—")],
+        ["Режим", (v.mode === "full" ? "весь трафик" : "только сети компании") + (v.killswitch ? " · kill switch" : "")],
+        v.latest_handshake ? ["Handshake", ago(v.latest_handshake)] : null,
+        v.enabled === "l2tp" ? ["IPsec", v.ipsec_up ? "установлен" : "нет"] : null,
+        ["Трафик", `↓ ${fmt(v.rx_bytes)} ↑ ${fmt(v.tx_bytes)}`],
+      ], "vpn");
+
+  $("#st-lan").innerHTML = l.error ? scard("LAN", false, [["Ошибка", esc(l.error)]], "lan")
+    : !l.enabled ? scard("LAN", null, [["LAN", "выключен"]], "lan")
+    : scard("LAN", l.active && l.dns_dhcp_running, [
+        ["Адрес роутера", esc(l.address)],
+        ["Порты", `${l.ports_up} из ${l.ports} с кабелем`],
+        ["Устройства", `${l.clients} по DHCP` + (l.static ? ` · закреплено ${l.static}` : "")],
+        ["DHCP и DNS", l.dns_dhcp_running ? "работают" : "не запущены"],
+        s.firewall.error ? null : ["Фаервол", s.firewall.active
+          ? `активен · правил ${s.firewall.rules} · пробросов ${s.firewall.forwards}` : "не активен"],
+      ], "lan");
+
+  $("#st-sys").innerHTML = y.error ? scard("Система", false, [["Ошибка", esc(y.error)]], "system")
+    : scard(esc(y.identity), true, [
+        ["Uptime", duration(y.uptime)],
+        ["CPU / память", `${y.cpu_percent ?? "…"}% / ${y.memory_percent ?? "—"}%`],
+        ["Диск", `${y.disk_percent}%`],
+        y.temperature != null ? ["Температура", `${y.temperature} °C`] : null,
+        ["Версия", `${esc(y.version)} · ${esc(y.mode)}`],
+        y.safe_mode ? ["Safe Mode", "включён"] : null,
+      ], "system");
+
+  if (!s.traffic.error) {
+    const prev = lastTraffic;
+    const dt = prev ? s.time - prev.time : 0;
+    const before = Object.fromEntries((prev?.traffic ?? []).map((i) => [i.name, i]));
+    $("#st-traffic").innerHTML = s.traffic.map((i) => {
+      const p = before[i.name];
+      return `<tr><td>${esc(i.name)}</td><td>${i.role ? `<span class="badge ${i.role === "wan" ? "wan" : "lan"}">${i.role.toUpperCase()}</span>` : ""}</td>
+        <td>${i.running ? '<span class="flag-r">есть</span>' : '<span class="flag-x">нет</span>'}</td>
+        <td>${p ? rate(i.rx_bytes - p.rx_bytes, dt) : "…"}</td><td>${p ? rate(i.tx_bytes - p.tx_bytes, dt) : "…"}</td>
+        <td>${fmt(i.rx_bytes)}</td><td>${fmt(i.tx_bytes)}</td></tr>`;
+    }).join("");
+    lastTraffic = s;
+  }
+}
+
 // ---------------------------------------------------------------- WAN
 const STATE_TEXT = {
   bound: "адрес получен по DHCP",
@@ -621,26 +693,28 @@ const ms = (v) => v == null ? "—" : `${v} мс`;
 const statusCell = (s) => s === "ok" || s === "open" ? `<span class="flag-r">${s === "ok" ? "ответ" : "открыт"}</span>`
   : `<span class="flag-x">${esc(s === "timeout" ? "нет ответа" : s === "closed" ? "закрыт" : s)}</span>`;
 
+const PORT_STATUS = { open: '<span class="flag-r">открыт</span>', closed: '<span class="hint">закрыт</span>',
+                      filtered: '<span class="flag-x">нет ответа</span>' };
 const TOOLS = {
   ping: {
-    fields: ["host", "count", "size", "interface"],
-    hint: "ICMP echo. Если узел не отвечает на ping — это не всегда значит, что он недоступен: попробуйте TCP Ping.",
+    fields: ["host", "family", "count", "interface"],
+    hint: "ICMP echo. Узел может не отвечать на ping и при этом работать — проверьте его сканером портов.",
     cols: ["#", "От", "TTL", "Время", "Статус"],
     row: (r) => [r.seq, esc(r.from ?? "—"), r.ttl ?? "—", ms(r.time_ms), statusCell(r.status)],
     summary: (d) => `Отправлено ${d.sent ?? "—"}, получено ${d.received ?? "—"}, потери ${d.loss ?? "—"}%`
       + (d.avg != null ? ` · мин/сред/макс ${d.min}/${d.avg}/${d.max} мс` : ""),
   },
-  tcp_ping: {
-    fields: ["host", "port", "count"],
-    hint: "Время установления TCP-соединения. Работает там, где ICMP закрыт: проверка веб-сервера, SIP по TCP, SSH.",
-    cols: ["#", "Порт", "Время", "Статус"],
-    row: (r) => [r.seq, r.port, ms(r.time_ms), statusCell(r.status)],
-    summary: (d) => `Попыток ${d.sent}, открыто ${d.received}, потери ${d.loss}%`
-      + (d.avg != null ? ` · мин/сред/макс ${d.min}/${d.avg}/${d.max} мс` : ""),
+  port_scan: {
+    fields: ["host", "ports", "interface"],
+    hint: "Какие TCP-порты открыты на узле. Порты через запятую или диапазоном, до 1024 за раз; на больших диапазонах показываются только открытые.",
+    cols: ["Порт", "Сервис", "Состояние", "Время"],
+    row: (r) => [r.port, esc(r.service ?? ""), PORT_STATUS[r.status] ?? statusCell(r.status), ms(r.time_ms)],
+    summary: (d) => `${d.host}${d.ip !== d.host ? ` (${d.ip})` : ""}: проверено ${d.scanned}, открыто ${d.open}, `
+      + `закрыто ${d.closed}, без ответа ${d.filtered}`,
   },
   traceroute: {
-    fields: ["host", "method", "port", "max_hops", "interface"],
-    hint: "Путь пакета до узла. «*» — узел не ответил (часто это просто фильтр, а не обрыв). Через VPN видны хопы внутри туннеля.",
+    fields: ["host", "max_hops", "interface"],
+    hint: "Путь пакета до узла (ICMP). «*» — узел не ответил: часто это фильтр, а не обрыв. Через VPN видны хопы внутри туннеля.",
     cols: ["Хоп", "Адрес", "Время 1", "Время 2", "Время 3", "Примечание"],
     row: (r) => [r.hop, esc(r.ip ?? "*") + (r.other_ips.length ? `<br><span class="hint">${r.other_ips.map(esc).join(", ")}</span>` : ""),
       ...[0, 1, 2].map((i) => r.times[i] == null ? "*" : `${r.times[i]} мс`), esc(r.notes.join(" "))],
@@ -657,20 +731,12 @@ const TOOLS = {
     row: (r) => [esc(r.ip), esc(r.mac ?? "—"), esc(r.vendor ?? "—"), esc(r.name ?? "—"), esc(r.interface), esc(r.state ?? "")],
   },
   scan: {
-    fields: ["network", "ports"],
-    hint: "Ping-обход подсети + ARP: находит и устройства, которые не отвечают на ping (телефоны, Windows). Порты проверяются только у найденных.",
-    cols: ["IP", "MAC", "Производитель", "Имя", "Ping", "Открытые порты", "Найден по"],
+    fields: ["network", "interface"],
+    hint: "Какие устройства есть в сети: ping-обход + ARP — находит и тех, кто не отвечает на ping (телефоны, Windows).",
+    cols: ["IP", "MAC", "Производитель", "Имя", "Ping", "Найден по"],
     row: (r) => [esc(r.ip), esc(r.mac ?? "—"), esc(r.vendor ?? "—"), esc(r.name ?? "—"), ms(r.ping_ms),
-      r.open_ports ? (r.open_ports.join(", ") || "—") : "", r.source === "arp" ? "ARP" : "ping"],
+      r.source === "arp" ? "ARP" : "ping"],
     summary: (d) => `Сеть ${d.network}: проверено ${d.scanned}, найдено ${d.found}`,
-  },
-  capture: {
-    fields: ["interface", "count", "seconds", "filter"],
-    hint: "tcpdump: пакеты в реальном времени, а полный захват — файлом .pcap для Wireshark. Фильтр — выражение BPF.",
-    cols: ["Время", "Интерфейс", "Протокол", "Источник", "Назначение", "Инфо"],
-    row: (r) => [esc(r.time), esc(r.interface ? `${r.interface} ${r.direction ?? ""}` : "—"), esc(r.proto),
-      esc(r.src ?? ""), esc(r.dst ?? ""), `<span class="mono">${esc(r.info)}</span>`],
-    summary: (d) => `Захвачено пакетов: ${d.packets}`,
   },
 };
 
@@ -690,14 +756,11 @@ async function selectTool(name) {
   const t = TOOLS[name];
   document.querySelectorAll("#tool-tabs .tab").forEach((x) => x.classList.toggle("active", x.dataset.tool === name));
   document.querySelectorAll("#tool-form [data-f]").forEach((l) => { l.hidden = !t.fields.includes(l.dataset.f); });
-  $("#tool-form").count.max = name === "capture" ? 2000 : 100;
-  $("#tool-form").count.value = name === "capture" ? 200 : 4;
   $("#tool-hint").textContent = t.hint;
   $("#tool-head").innerHTML = `<tr>${t.cols.map((c) => `<th>${c}</th>`).join("")}</tr>`;
   $("#tool-rows").innerHTML = "";
   $("#tool-summary").hidden = true;
   $("#tool-error").textContent = "";
-  $("#tool-pcap").hidden = true;
   $("#tool-start").textContent = name === "neighbors" ? "Обновить" : "Старт";
   toolBusy(false);
   if (!toolInterfaces) {
@@ -709,7 +772,7 @@ async function selectTool(name) {
       $("#tool-form").network.value = toolInterfaces.scan_network ?? "";
     } catch (e) { console.error(e); }
   }
-  $("#tool-form").interface.value = name === "capture" && toolInterfaces?.interfaces.includes("br-lan") ? "br-lan" : "auto";
+  $("#tool-form").interface.value = "auto";
   if (name === "neighbors") runTool();
 }
 
@@ -751,7 +814,9 @@ async function runTool() {
   }
 
   const params = {};
-  TOOLS[tool].fields.forEach((name) => { params[name] = f[name].value; });
+  TOOLS[tool].fields.forEach((name) => {
+    params[name] = name === "family" ? f.querySelector("input[name=family]:checked").value : f[name].value;
+  });
   const proto = location.protocol === "https:" ? "wss" : "ws";
   toolWs = new WebSocket(`${proto}://${location.host}/api/tools/ws`);
   toolBusy(true);
@@ -759,7 +824,7 @@ async function runTool() {
   toolWs.onmessage = (m) => {
     const ev = JSON.parse(m.data);
     if (ev.type === "row") addToolRow(ev.row);
-    else if (ev.type === "summary") { showSummary(ev.data); if (tool === "capture" && ev.data.pcap) $("#tool-pcap").hidden = false; }
+    else if (ev.type === "summary") showSummary(ev.data);
     else if (ev.type === "info") $("#tool-status").textContent = ev.text;
     else if (ev.type === "error") $("#tool-error").textContent = ev.text;
   };
@@ -1061,6 +1126,7 @@ $("#routes").addEventListener("click", async (ev) => {
 
 // ---------------------------------------------------------------- навигация
 const pages = {
+  "status": loadStatus,
   "wan": loadWan,
   "lan": loadLan,
   "vpn": loadVpn,
@@ -1074,7 +1140,7 @@ const pages = {
 let timer = null;
 
 function show() {
-  const page = pages[location.hash.slice(1)] ? location.hash.slice(1) : "wan";
+  const page = pages[location.hash.slice(1)] ? location.hash.slice(1) : "status";
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   document.querySelectorAll("nav a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
   clearInterval(timer);
@@ -1109,7 +1175,7 @@ async function checkAuth() {
 
 function setIdentity(name) {
   $("#identity").textContent = name;
-  document.title = `${name} — Ubuntu Router`;
+  document.title = `${name} — OutpostGate`;
 }
 
 function startApp() {

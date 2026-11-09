@@ -3,16 +3,18 @@
 #   docker compose up --build
 #   http://localhost:8000      — веб-интерфейс
 #   http://localhost:8000/docs — Swagger
+#   ssh -p 2222 admin@localhost — командная строка в стиле MikroTik
+name: outpost-gate   # имя проекта не зависит от названия папки
 services:
   router:
     build: .
-    image: ubuntu-router:dev
-    container_name: ubuntu-router-dev
+    image: outpost-gate:dev
+    container_name: outpost-gate-dev
     restart: unless-stopped   # «Перезапустить сервис» в System: Docker поднимет контейнер сам
     environment:
       ROUTER_MODE: dev
       PYTHONUNBUFFERED: "1"
-      # ROUTER_ADMIN_PASSWORD: "свой-пароль"   # иначе случайный — смотрите docker compose logs
+      # ROUTER_ADMIN_PASSWORD: "свой-пароль"   # иначе admin без пароля (вход только из локальной сети)
     cap_add:
       - NET_ADMIN        # действует только внутри своего namespace
       - NET_RAW
@@ -22,11 +24,12 @@ services:
       net.ipv4.ip_forward: "1"
     ports:
       - "8000:8000"
+      - "2222:22"        # SSH -> CLI роутера
     volumes:
-      - ./app:/opt/ubuntu-router/app       # правки кода без пересборки
-      - ./web:/opt/ubuntu-router/web
-      - ./config:/etc/ubuntu-router            # папка целиком: нужна для атомарной записи router.yaml
-      - ./data:/var/lib/ubuntu-router          # снимки конфига (data/snapshots)
+      - ./app:/opt/outpost-gate/app       # правки кода без пересборки
+      - ./web:/opt/outpost-gate/web
+      - ./config:/etc/outpost-gate            # папка целиком: нужна для атомарной записи router.yaml
+      - ./data:/var/lib/outpost-gate          # снимки конфига (data/snapshots)
     networks:
       wan:
         priority: 1000   # подключается первой -> eth0

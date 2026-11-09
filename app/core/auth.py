@@ -29,7 +29,7 @@ from pathlib import Path
 
 from app.core.config import settings
 
-COOKIE = "ur_session"
+COOKIE = "og_session"
 SESSION_TTL = 12 * 3600
 MIN_PASSWORD = 8
 NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}$")
@@ -189,6 +189,17 @@ def login(name: str, password: str, ip: str) -> tuple[User, str]:
             raise AuthError(403, "пароль не задан: вход без пароля разрешён только из локальной сети")
         _fails.pop(ip, None)
         return _user(u), make_token(u["name"])
+
+
+def passwordless(name: str) -> bool:
+    """Пользователь есть и пароль у него не задан (первый вход admin, как в MikroTik)."""
+    u = next((u for u in _load() if u["name"] == (name or "").strip().lower()), None)
+    return bool(u) and not u["hash"]
+
+
+def get_user(name: str) -> User | None:
+    u = next((u for u in _load() if u["name"] == name), None)
+    return _user(u) if u else None
 
 
 def check_access(path: str, method: str, user: User | None) -> tuple[int, str] | None:

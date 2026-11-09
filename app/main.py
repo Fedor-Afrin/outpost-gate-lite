@@ -1,4 +1,4 @@
-"""Точка входа FastAPI-приложения Ubuntu Router."""
+"""Точка входа FastAPI-приложения OutpostGate."""
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,9 +9,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agent import apply as agent
 from app.api.routes import auth as auth_routes
-from app.api.routes import firewall, interfaces, ip_addresses, ip_routes, lan, system, tools, vpn, wan
+from app.api.routes import firewall, interfaces, ip_addresses, ip_routes, lan, status, system, tools, vpn, wan
 from app.core import auth
 from app.core.config import settings
+from app.services import ssh_server
 from app.services import system as system_svc
 from app.services import lan as lan_svc
 from app.services import vpn as vpn_svc
@@ -25,16 +26,19 @@ async def lifespan(_: FastAPI):
     # Агент работает внутри процесса API: DHCP-клиентом WAN управляет этот процесс
     # в отдельном потоке: pyroute2 не должен видеть цикл событий uvicorn
     await asyncio.to_thread(agent.apply_startup)
+    ssh = await ssh_server.start()             # CLI в стиле MikroTik по SSH
     yield
+    if ssh:
+        ssh.close()
     vpn_svc.stop_all()
     lan_svc.stop_dnsmasq()
     wan_svc.stop_dhcp()   # корректно отпустить аренду при остановке
 
 
 app = FastAPI(
-    title="Ubuntu Router",
+    title="OutpostGate",
     version=settings.version,
-    description="VPN-шлюз на Ubuntu: управление через REST API (идеи RouterOS)",
+    description="OutpostGate — VPN-шлюз для удалённого сотрудника: REST API (идеи RouterOS)",
     lifespan=lifespan,
 )
 
@@ -62,6 +66,7 @@ async def security(request: Request, call_next):
 
 # API: основные разделы
 app.include_router(auth_routes.router, prefix="/api/auth", tags=["Auth"])
+app.include_router(status.router, prefix="/api/status", tags=["Status"])
 app.include_router(system.router, prefix="/api/system", tags=["System"])
 app.include_router(wan.router, prefix="/api/wan", tags=["WAN"])
 app.include_router(lan.router, prefix="/api/lan", tags=["LAN"])
