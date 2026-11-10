@@ -27,15 +27,27 @@ docker compose up --build
 - Swagger: http://localhost:8000/docs
 
 ## CLI
+Синтаксис MikroTik RouterOS, включая сокращения (`/ip addr pr`), `print detail`, номера строк из `print`.
 ```
 [admin@office] > /ip address print
 [admin@office] > /ip route
 [admin@office] /ip route> add dst-address=10.0.0.0/8 gateway=192.168.88.254
-[admin@office] /ip route> /ip dhcp-server lease make-static 3
-[admin@office] > /ping 8.8.8.8 count=3
+[admin@office] /ip route> set 0 distance=5 comment="резерв"
+[admin@office] > /ip arp print
+[admin@office] > /ip dhcp-server lease make-static 3
+[admin@office] > /ip firewall filter add chain=input protocol=tcp dst-port=22 in-interface-list=WAN src-address=203.0.113.0/24
+[admin@office] > /ip firewall nat add chain=dstnat action=dst-nat protocol=tcp dst-port=8080 to-addresses=192.168.88.20 to-ports=80
+[admin@office] > /interface monitor-traffic eth0
+[admin@office] > /tool ip-scan address-range=192.168.88.0/24
+[admin@office] > /user add name=ivan group=read
 [admin@office] > /system shell        # bash; назад — exit или Ctrl-D
 ```
-`?` — помощь в любом меню, Tab — подсказки, `ssh admin@router "/ip route print"` — одна команда.
+Меню: `/interface` (ethernet, bridge, wireguard, l2tp-client, monitor-traffic), `/ip` (address, route, arp,
+neighbor, pool, dhcp-server, dhcp-client, dns, service, firewall filter/nat), `/wan`, `/lan`, `/vpn`, `/system`
+(resource, identity, clock, routerboard, package, shell, reboot), `/user`, `/password`, `/log`, `/tool`
+(ping, traceroute, ip-scan, dns-lookup), `/export`.
+`?` — помощь в меню, `команда ?` — параметры команды, Tab — подсказки (и значения: интерфейсы, chain=, action=).
+Одна команда без входа: `ssh admin@router "/ip route print"`.
 
 ## Дорожная карта
 - [x] Каркас
@@ -48,5 +60,6 @@ docker compose up --build
 - [x] Tools: ping (IPv4/IPv6), сканер портов, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP)
 - [x] System: вход (admin без пароля при первом входе, как MikroTik), роли, пользователи, журнал, резервные копии и снимки, Safe Mode, ресурсы, перезапуск
 - [x] Status: WAN, VPN, LAN, система, трафик интерфейсов
-- [x] CLI в стиле MikroTik по SSH: меню, print с флагами и номерами, Tab, /system shell
+- [x] CLI в стиле MikroTik по SSH: ~70 команд, сокращения, print detail, set/move, Tab со значениями, /system shell
+- [x] Веб-интерфейс без раздела Advanced: адреса и маршруты — в CLI
 - [ ] Дальше: VLAN, смена MAC, DHCP-опция 66, мониторинг (Prometheus), HTTPS

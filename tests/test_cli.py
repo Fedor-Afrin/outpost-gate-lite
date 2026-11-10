@@ -29,6 +29,33 @@ class FakeApi:
                          "leases": [{"mac": "00:0b:82:aa:bb:cc", "ip": "192.168.88.20", "hostname": "GXP1625",
                                      "vendor": "Grandstream"}],
                          "static_leases": [{"mac": "aa:aa:aa:aa:aa:aa", "ip": "192.168.88.5", "name": "Принтер"}]},
+            "/api/ip/routes": [
+                {"id": 7, "dst_address": "10.0.0.0/8", "gateway": "192.168.88.254", "distance": 1, "interface": "br-lan",
+                 "comment": None, "disabled": False, "dynamic": False, "active": True, "connected": False, "static": True}],
+            "/api/tools/neighbors": [
+                {"ip": "192.168.88.20", "mac": "00:0b:82:aa:bb:cc", "interface": "br-lan", "state": "REACHABLE",
+                 "vendor": "Grandstream", "name": "GXP1625"}],
+            "/api/tools/interfaces": {"interfaces": ["br-lan", "eth0", "eth1"], "scan_network": "192.168.88.0/24"},
+            "/api/firewall": {"rules": [
+                {"id": 1, "chain": "input", "enabled": True, "action": "accept", "in_zone": "wan", "out_zone": "any",
+                 "src": "203.0.113.0/24", "dst": None, "protocol": "tcp", "src_ports": None, "dst_ports": "22",
+                 "description": "SSH", "packets": 5, "bytes": 300},
+                {"id": 2, "chain": "forward", "enabled": True, "action": "drop", "in_zone": "lan", "out_zone": "wan",
+                 "src": "192.168.88.50/32", "dst": None, "protocol": "all", "src_ports": None, "dst_ports": None,
+                 "description": None, "packets": 0, "bytes": 0},
+                {"id": 3, "chain": "input", "enabled": True, "action": "accept", "in_zone": "vpn", "out_zone": "any",
+                 "src": None, "dst": None, "protocol": "icmp", "src_ports": None, "dst_ports": None,
+                 "description": "ping", "packets": 0, "bytes": 0}],
+                "forwards": [{"id": 4, "enabled": True, "protocol": "tcp", "wan_port": "8080", "to_ip": "192.168.88.20",
+                              "to_port": 80, "src": None, "description": "web", "packets": 1, "bytes": 60}],
+                "system": {"input": ["LAN — всё"], "forward": ["LAN → WAN"], "nat": ["masquerade"]},
+                "management_ports": [22, 8000]},
+            "/api/system/users": [{"name": "admin", "role": "full", "must_change": False, "has_password": True},
+                                  {"name": "ivan", "role": "read", "must_change": True, "has_password": True}],
+            "/api/interfaces": [{"name": "eth0", "running": True, "mac": "02:00:00:00:00:01", "mtu": 1500,
+                                 "addresses": ["10.0.0.45/24"], "rx_bytes": 1000, "tx_bytes": 500}],
+            "/api/system/audit?limit=50": [{"time": "2026-11-10T20:00:00+02:00", "user": "admin", "method": "PUT",
+                                            "path": "/api/wan", "status": 200, "ip": "10.0.0.5"}],
         }
 
     def get(self, path):
@@ -37,6 +64,8 @@ class FakeApi:
 
     def post(self, path, body=None):
         self.calls.append(("POST", path, body))
+        if path.endswith("/move"):
+            return {}
         if body and body.get("address") == "bad":
             raise ApiError("неверный адрес 'bad'")
         return {}
@@ -137,10 +166,13 @@ def test_ping_validation(ctx):
 
 def test_completion():
     assert c.complete("", []) == sorted(c.ROOT.children)
-    assert c.complete("/ip a", []) == ["address"]
-    assert c.complete("/ip ", []) == ["address", "dhcp-server", "dns", "firewall", "route"]
+    assert c.complete("/ip a", []) == ["address", "arp"]
+    assert c.complete("/ip ", []) == ["address", "arp", "dhcp-client", "dhcp-server", "dns", "firewall",
+                                      "neighbor", "pool", "route", "service"]
     assert c.complete("/ip/ad", []) == ["/ip/address"]
     assert c.complete("add ", ["ip", "address"]) == ["address=", "interface=", "comment=", "disabled="]
+    assert c.complete("add disabled=", ["ip", "address"]) == ["disabled=yes", "disabled=no"]
+    assert c.complete("print ", ["ip", "route"]) == ["detail"]
     assert c.complete("add address=1.1.1.1/32 i", ["ip", "address"]) == ["interface="]
     assert c.complete("pr", ["ip", "route"]) == ["print"]
     assert c.complete("/nothing ", []) == []
@@ -160,3 +192,106 @@ def test_status_overview_survives_errors(monkeypatch):
         monkeypatch.setattr(status, name, lambda: {})
     o = status.overview()
     assert o["system"] == {"identity": "x"} and o["wan"] == {"error": "нет netlink"} and "time" in o
+
+
+def test_abbreviations(ctx):
+    cx, out = ctx
+    c.execute(cx, "/ip addr pr", [])
+    assert out[1].split()[1] == "ADDRESS"
+    c.execute(cx, "/ip addr add addr=10.0.0.1/24 int=eth2", [])                 # сокращённые параметры
+    assert cx.api.calls[-1][2]["interface"] == "eth2"
+    with pytest.raises(c.CliError, match="ambiguous value of a"):
+        c.execute(cx, "/ip a print", [])                                       # address или arp
+    with pytest.raises(c.CliError, match="unknown parameter"):
+        c.execute(cx, "/ip address add zzz=1", [])
+
+
+def test_print_detail_and_set(ctx):
+    cx, out = ctx
+    c.execute(cx, "/ip route print detail", [])
+    assert out[1].startswith("0 AS dst-address=10.0.0.0/8 gateway=192.168.88.254")
+    c.execute(cx, '/ip route set 0 distance=5 comment="backup link"', [])
+    assert cx.api.calls[-1] == ("PATCH", "/api/ip/routes/7", {"distance": 5, "comment": "backup link"})
+    c.execute(cx, "/ip address print", [])
+    c.execute(cx, '/ip address comment 0 comment=LAN-main', [])
+    assert cx.api.calls[-1] == ("PATCH", "/api/ip/addresses/1", {"comment": "LAN-main"})
+    with pytest.raises(c.CliError, match="dynamic"):
+        c.execute(cx, "/ip address set 1 comment=x", [])
+
+
+def test_arp_and_value_completion(ctx):
+    cx, out = ctx
+    c.execute(cx, "/ip arp print", [])
+    assert "GXP1625" in out[2] and "reachable" in out[2]
+    assert c.complete("/ping 8.8.8.8 interface=e", [], cx) == ["interface=eth0", "interface=eth1"]
+    assert c.complete("/ip firewall filter add chain=", [], cx) == ["chain=input", "chain=forward"]
+
+
+def test_firewall_cli(ctx):
+    cx, out = ctx
+    c.execute(cx, "/ip firewall filter add chain=input protocol=tcp dst-port=443 in-interface-list=WAN "
+                  "src-address=198.51.100.0/24 comment=HTTPS", [])
+    assert cx.api.calls[-1] == ("POST", "/api/firewall/rules", {
+        "chain": "input", "enabled": True, "action": "accept", "in_zone": "wan", "out_zone": "any",
+        "protocol": "tcp", "src": "198.51.100.0/24", "dst_ports": "443", "description": "HTTPS"})
+    with pytest.raises(c.CliError, match="порты"):
+        c.execute(cx, "/ip firewall filter add chain=input dst-port=22", [])
+    c.execute(cx, "/ip firewall filter print", [])
+    c.execute(cx, "/ip firewall filter disable 0", [])
+    assert cx.api.calls[-1][0:2] == ("PUT", "/api/firewall/rules/1") and cx.api.calls[-1][2]["enabled"] is False
+    c.execute(cx, "/ip firewall filter move 2 0", [])                          # input: правило 3 -> на место 1
+    assert cx.api.calls[-1] == ("POST", "/api/firewall/rules/3/move", {"direction": "up"})
+    with pytest.raises(c.CliError, match="цепочки"):
+        c.execute(cx, "/ip firewall filter move 1 0", [])                      # forward -> input нельзя
+
+
+def test_nat_cli(ctx):
+    cx, _ = ctx
+    c.execute(cx, "/ip firewall nat add chain=dstnat action=dst-nat protocol=tcp dst-port=5060 "
+                  "to-addresses=192.168.88.21", [])
+    assert cx.api.calls[-1] == ("POST", "/api/firewall/forwards",
+                                {"enabled": True, "protocol": "tcp", "wan_port": "5060", "to_ip": "192.168.88.21"})
+    with pytest.raises(c.CliError, match="srcnat"):
+        c.execute(cx, "/ip firewall nat add chain=srcnat action=masquerade dst-port=1 to-addresses=1.1.1.1", [])
+    c.execute(cx, "/ip firewall nat print", [])
+    c.execute(cx, "/ip firewall nat set 0 to-ports=8081", [])
+    assert cx.api.calls[-1][2]["to_port"] == 8081 and cx.api.calls[-1][2]["wan_port"] == "8080"
+
+
+def test_users_password_log(ctx):
+    cx, out = ctx
+    cx.secret = lambda prompt: "Secret123"
+    c.execute(cx, "/user add name=petr group=read", [])
+    assert cx.api.calls[-1] == ("POST", "/api/system/users", {"name": "petr", "password": "Secret123", "role": "read"})
+    c.execute(cx, "/user print", [])
+    assert "сменит при входе" in out[-1]
+    c.execute(cx, "/user remove 1", [])
+    assert cx.api.calls[-1] == ("DELETE", "/api/system/users/ivan", None)
+    c.execute(cx, "password", ["ip"])                                          # из любого меню
+    assert cx.api.calls[-1] == ("POST", "/api/auth/password", {"old": "Secret123", "new": "Secret123"})
+    answers = iter(["old", "new-1", "new-2"])
+    cx.secret = lambda prompt: next(answers)
+    with pytest.raises(c.CliError, match="не совпадают"):
+        c.execute(cx, "/password", [])
+    c.execute(cx, "/log print", [])
+    assert "admin" in out[-1] and "/api/wan" in out[-1]
+
+
+def test_monitor_traffic_once(ctx):
+    cx, out = ctx
+    calls = iter([1000, 126000])
+    def get(path):
+        if path == "/api/interfaces":
+            rx = next(calls)
+            return [{"name": "eth0", "rx_bytes": rx, "tx_bytes": rx // 2}]
+        return FakeApi().get(path)
+    cx.api.get = get
+    cx.sleep = lambda s: None
+    c.execute(cx, "/interface monitor-traffic eth0 once=yes", [])
+    assert "rx-bits-per-second" in out[-1]
+
+
+def test_help_for_command(ctx):
+    cx, out = ctx
+    c.execute(cx, "/ip address add ?", [])
+    assert out[0].startswith("добавить") and "interface=" in out[1]

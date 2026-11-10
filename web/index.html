@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>OutpostGate</title>
-  <link rel="stylesheet" href="css/style.css?v=0.9.0">
+  <link rel="stylesheet" href="css/style.css?v=0.10.0">
 </head>
 <body>
   <!-- вход -->
@@ -44,10 +44,6 @@
       <a href="#firewall" data-page="firewall">Firewall</a>
       <a href="#tools" data-page="tools">Tools</a>
       <a href="#system" data-page="system">System</a>
-      <div class="group">Advanced</div>
-      <a href="#interfaces" data-page="interfaces" class="sub">Interfaces</a>
-      <a href="#ip-addresses" data-page="ip-addresses" class="sub">IP Addresses</a>
-      <a href="#ip-routes" data-page="ip-routes" class="sub">IP Routes</a>
     </nav>
     <p id="sysinfo"></p>
     <div class="whoami"><span id="whoami"></span> <a href="#" id="logout">Выйти</a></div>
@@ -557,62 +553,8 @@
       </div>
     </section>
 
-    <!-- Interfaces -->
-    <section id="page-interfaces" class="page">
-      <h1>Interfaces</h1>
-      <table>
-        <thead>
-          <tr><th></th><th>Name</th><th>MAC</th><th>MTU</th><th>Addresses</th><th>RX</th><th>TX</th></tr>
-        </thead>
-        <tbody id="ifaces"></tbody>
-      </table>
-    </section>
-
-    <!-- IP → Addresses -->
-    <section id="page-ip-addresses" class="page">
-      <h1>IP → Addresses</h1>
-
-      <form id="addr-form" class="toolbar">
-        <input name="address" placeholder="192.168.88.1/24" required>
-        <select name="interface" id="addr-iface" required></select>
-        <input name="comment" placeholder="comment">
-        <button type="submit">+ Add</button>
-        <span id="addr-error" class="error"></span>
-      </form>
-
-      <table>
-        <thead>
-          <tr><th>#</th><th>Flags</th><th>Address</th><th>Network</th><th>Interface</th><th>Comment</th><th></th></tr>
-        </thead>
-        <tbody id="addrs"></tbody>
-      </table>
-      <p class="legend">Flags: <b>X</b> — disabled, <b>I</b> — invalid, <b>D</b> — dynamic (не из конфига)</p>
-    </section>
-
-    <!-- IP → Routes -->
-    <section id="page-ip-routes" class="page">
-      <h1>IP → Routes</h1>
-
-      <form id="route-form" class="toolbar">
-        <input name="dst_address" placeholder="dst-address: 0.0.0.0/0" title="Пусто = маршрут по умолчанию 0.0.0.0/0">
-        <input name="gateway" placeholder="gateway: 192.168.1.1 или eth0" required>
-        <input name="distance" type="number" min="1" max="255" value="1" title="distance" class="narrow">
-        <input name="comment" placeholder="comment">
-        <button type="submit">+ Add</button>
-        <span id="route-error" class="error"></span>
-      </form>
-
-      <table>
-        <thead>
-          <tr><th>#</th><th>Flags</th><th>Dst. Address</th><th>Gateway</th><th>Distance</th><th>Interface</th><th>Comment</th><th></th></tr>
-        </thead>
-        <tbody id="routes"></tbody>
-      </table>
-      <p class="legend">Flags: <b>X</b> — disabled, <b>A</b> — active, <b>D</b> — dynamic, <b>C</b> — connected, <b>S</b> — static.
-        Статический маршрут без <b>A</b> — не применён (шлюз недоступен).</p>
-    </section>
   </main>
 
-  <script src="js/app.js?v=0.9.0"></script>
+  <script src="js/app.js?v=0.10.0"></script>
 </body>
 </html>

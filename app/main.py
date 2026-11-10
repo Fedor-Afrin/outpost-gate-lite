@@ -74,10 +74,10 @@ app.include_router(vpn.router, prefix="/api/vpn", tags=["VPN"])
 app.include_router(firewall.router, prefix="/api/firewall", tags=["Firewall"])
 app.include_router(tools.router, prefix="/api/tools", tags=["Tools"])
 
-# API: Advanced (двигатель под WAN / LAN / VPN)
-app.include_router(interfaces.router, prefix="/api/interfaces", tags=["Advanced / Interfaces"])
-app.include_router(ip_addresses.router, prefix="/api/ip/addresses", tags=["Advanced / IP Addresses"])
-app.include_router(ip_routes.router, prefix="/api/ip/routes", tags=["Advanced / IP Routes"])
+# API: интерфейсы, адреса, маршруты — двигатель под WAN / LAN / VPN; в вебе их нет, есть в CLI
+app.include_router(interfaces.router, prefix="/api/interfaces", tags=["Interfaces"])
+app.include_router(ip_addresses.router, prefix="/api/ip/addresses", tags=["IP Addresses"])
+app.include_router(ip_routes.router, prefix="/api/ip/routes", tags=["IP Routes"])
 
 # Веб-интерфейс (статические файлы) — монтируется последним
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"

@@ -272,7 +272,7 @@ def _check_overlap(cfg: LanConfig, wan_if: str | None) -> None:
     for ifname, cidr in netlink.kernel_ipv4_addresses():
         if ifname == wan_if and ipaddress.ip_interface(cidr).network.overlaps(lan_net):
             raise LanError(400, f"сеть LAN {lan_net} пересекается с адресом на WAN ({wan_if}: {cidr}). "
-                                f"Выберите другую сеть LAN или уберите адрес в Advanced → IP Addresses")
+                                f"Выберите другую сеть LAN или уберите адрес в CLI: /ip address print, затем remove")
 
 
 def _wait_for_ports(seconds: float = 5.0) -> None:

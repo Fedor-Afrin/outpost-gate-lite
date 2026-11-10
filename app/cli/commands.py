@@ -1,19 +1,25 @@
 """
-Команды CLI в стиле MikroTik RouterOS: дерево меню, разбор строки, вывод таблиц, автодополнение.
+Команды CLI в стиле MikroTik RouterOS: дерево меню, разбор строки, вывод, автодополнение.
 
   [admin@office] > /ip address print
+  [admin@office] > /ip addr pr detail                 # сокращения, как в RouterOS
   [admin@office] > /ip address
   [admin@office] /ip address> add address=192.168.88.1/24 interface=eth1
-  [admin@office] /ip address> remove 2
+  [admin@office] /ip address> set 0 comment="LAN"
   [admin@office] /ip address> ..
   [admin@office] /ip> /ping 8.8.8.8 count=3
 
-Каждая команда — вызов того же REST API, что и у веб-интерфейса (кроме ping/traceroute,
-которые запускаются прямо на роутере). Номера строк, как в RouterOS, берутся из последнего print.
+Каждая команда — вызов того же REST API, что и у веб-интерфейса (ping, traceroute,
+ip-scan запускаются прямо на роутере). Номера строк, как в RouterOS, — из последнего print.
 """
 from __future__ import annotations
 
+import asyncio
+import getpass
+import ipaddress
+import os
 import shlex
+import urllib.parse
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -35,6 +41,7 @@ class Cmd:
     fn: Callable
     help: str
     params: tuple[str, ...] = ()
+    values: dict = field(default_factory=dict)     # параметр -> варианты для Tab (список или функция ctx)
 
 
 @dataclass
@@ -50,8 +57,11 @@ class Ctx:
     user: str = "admin"
     role: str = "full"
     confirm: Callable[[str], bool] = lambda q: input(q).strip().lower() in ("y", "yes", "д", "да")
+    secret: Callable[[str], str] = getpass.getpass
     shell: Callable[[], None] | None = None
-    numbers: dict = field(default_factory=dict)     # путь меню -> [id строки 0, id строки 1, ...]
+    numbers: dict = field(default_factory=dict)     # меню -> [объект строки 0, строки 1, ...]
+    detail: bool = False                            # print detail
+    sleep: Callable[[float], None] = time.sleep
 
 
 # --- вывод -------------------------------------------------------------------------------------------
@@ -64,6 +74,15 @@ def fmt_bytes(n) -> str:
     return str(n)
 
 
+def fmt_bps(n) -> str:
+    n = float(n or 0) * 8
+    for unit in ("bps", "kbps", "Mbps", "Gbps"):
+        if n < 1000 or unit == "Gbps":
+            return f"{n:.0f}{unit}" if unit == "bps" else f"{n:.1f}{unit}"
+        n /= 1000
+    return str(n)
+
+
 def fmt_uptime(sec) -> str:
     if sec is None:
         return "-"
@@ -72,14 +91,30 @@ def fmt_uptime(sec) -> str:
     return (f"{d}d" if d else "") + f"{h}h{m}m{s}s"
 
 
+def _cell(v) -> str:
+    if v is None or v == "":
+        return ""
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, (list, tuple)):
+        return ",".join(map(str, v))
+    return str(v)
+
+
 def table(ctx: Ctx, cols: list[str], rows: list[list], flags: list[str] | None = None,
           legend: str | None = None, numbered: bool = True) -> None:
-    """Таблица как в RouterOS: легенда флагов, номер, флаги, колонки ЗАГЛАВНЫМИ."""
+    """Таблица как в RouterOS; при `print detail` — строки «ключ=значение»."""
+    flags = flags or [""] * len(rows)
+    cells = [[_cell(c) for c in r] for r in rows]
     if legend:
         ctx.out(f"Flags: {legend}")
-    flags = flags or [""] * len(rows)
+    if ctx.detail:
+        nw = len(str(max(len(rows) - 1, 0)))
+        for i, (flag, r) in enumerate(zip(flags, cells)):
+            pairs = " ".join(f'{c}={shlex.quote(v) if " " in v else v}' for c, v in zip(cols, r) if v)
+            ctx.out(f"{i:>{nw}} {flag:<2} {pairs}".rstrip())
+        return
     fw = max([len(f) for f in flags] + [0])
-    cells = [[str(c) if c not in (None, "") else "" for c in r] for r in rows]
     widths = [max([len(h)] + [len(r[i]) for r in cells]) for i, h in enumerate(cols)]
     nw = len(str(max(len(rows) - 1, 0))) if numbered else 0
 
@@ -93,18 +128,14 @@ def table(ctx: Ctx, cols: list[str], rows: list[list], flags: list[str] | None =
 
 
 def kv(ctx: Ctx, pairs: list[tuple[str, object]]) -> None:
-    """Вывод «ключ: значение» с выравниванием, как /system resource print."""
+    """«ключ: значение» с выравниванием, как /system resource print."""
     pairs = [(k, v) for k, v in pairs if v is not None]
     w = max((len(k) for k, _ in pairs), default=0)
     for k, v in pairs:
-        if isinstance(v, (list, tuple)):
-            v = ",".join(map(str, v)) if v else ""
-        elif isinstance(v, bool):
-            v = "yes" if v else "no"
-        ctx.out(f"{k:>{w}}: {v}")
+        ctx.out(f"{k:>{w}}: {_cell(v)}")
 
 
-# --- разбор аргументов --------------------------------------------------------------------------------
+# --- аргументы ----------------------------------------------------------------------------------------
 def split_args(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
     pos, named = [], {}
     for t in tokens:
@@ -116,26 +147,53 @@ def split_args(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
     return pos, named
 
 
+def expand_params(cmd: Cmd, named: dict) -> dict:
+    """Сокращения параметров, как в RouterOS: addr= -> address=, если вариант один."""
+    if not cmd.params:
+        return named
+    out = {}
+    for k, v in named.items():
+        if k in cmd.params or k == "numbers":
+            out[k] = v
+            continue
+        matches = [p for p in cmd.params if p.startswith(k)]
+        if len(matches) == 1:
+            out[matches[0]] = v
+        elif matches:
+            raise CliError(f"ambiguous value of {k}, more than one possible value: {', '.join(matches)}")
+        else:
+            raise CliError(f"expected end of command (unknown parameter {k})")
+    return out
+
+
 def yes(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in ("yes", "true", "1", "on", "да")
 
 
-def parse_numbers(ctx: Ctx, menu: str, pos: list[str], named: dict) -> list:
-    """'0,2' или numbers=0,2 -> id строк из последнего print этого меню."""
-    raw = named.get("numbers") or ",".join(pos)
+def pick(ctx: Ctx, menu: str, pos: list[str], named: dict) -> list:
+    """'0,2' или numbers=0,2 -> объекты строк из последнего print этого меню."""
+    raw = named.get("numbers") or ",".join(p for p in pos if p not in ("detail",))
     if not raw:
         raise CliError("укажите номер(а) строк из print, например: remove 0,2")
-    ids = ctx.numbers.get(menu)
-    if ids is None:
+    items = ctx.numbers.get(menu)
+    if items is None:
         raise CliError(f"сначала выполните print в {menu}")
     out = []
     for part in raw.split(","):
         part = part.strip()
-        if not part.isdigit() or int(part) >= len(ids):
+        if "-" in part and part.replace("-", "").isdigit():          # диапазон 0-3
+            a, b = (int(x) for x in part.split("-", 1))
+            idx = list(range(a, b + 1))
+        elif part.isdigit():
+            idx = [int(part)]
+        else:
             raise CliError(f"no such item ({part})")
-        out.append(ids[int(part)])
+        for i in idx:
+            if i >= len(items):
+                raise CliError(f"no such item ({i})")
+            out.append(items[i])
     return out
 
 
@@ -145,57 +203,192 @@ def require(named: dict, *names: str) -> None:
         raise CliError("missing value(s) of argument(s) " + ", ".join(missing))
 
 
+def _not_dynamic(items: list[dict]) -> None:
+    if any(i.get("id") is None for i in items):
+        raise CliError("failure: dynamic item can not be changed (он не из конфигурации)")
+
+
+# --- значения для Tab ----------------------------------------------------------------------------------
+def iface_names(ctx: Ctx) -> list[str]:
+    try:
+        return ctx.api.get("/api/tools/interfaces")["interfaces"]
+    except Exception:
+        return []
+
+
+YESNO = ["yes", "no"]
+ZONE_LISTS = ["WAN", "LAN", "VPN", "all"]
+IFACE = {"interface": iface_names}
+
+
 # --- /interface ---------------------------------------------------------------------------------------
-def interface_print(ctx: Ctx, pos, named):
+def interface_print(ctx, pos, named):
     items = ctx.api.get("/api/interfaces")
-    table(ctx, ["name", "mac-address", "mtu", "address", "rx", "tx"],
-          [[i["name"], i.get("mac"), i.get("mtu"), ",".join(i.get("addresses", [])),
-            fmt_bytes(i.get("rx_bytes")), fmt_bytes(i.get("tx_bytes"))] for i in items],
+    lan = _lan_roles(ctx)
+    ctx.numbers["/interface"] = items
+    table(ctx, ["name", "type", "mac-address", "mtu", "address", "rx", "tx"],
+          [[i["name"], lan.get(i["name"], _iface_type(i["name"])), i.get("mac"), i.get("mtu"),
+            i.get("addresses", []), fmt_bytes(i.get("rx_bytes")), fmt_bytes(i.get("tx_bytes"))] for i in items],
           flags=["R" if i.get("running") else "X" for i in items], legend="R - running, X - no link")
 
 
-# --- /ip address ----------------------------------------------------------------------------------------
-def address_print(ctx: Ctx, pos, named):
+def _iface_type(name: str) -> str:
+    if name == "lo":
+        return "loopback"
+    if name.startswith("br"):
+        return "bridge"
+    if name.startswith(("wg", "awg")):
+        return "wireguard"
+    if name.startswith(("l2tp", "ppp")):
+        return "l2tp-out"
+    return "ether"
+
+
+def _lan_roles(ctx) -> dict[str, str]:
+    try:
+        return {p["name"]: f'ether ({p["role"].upper()})' for p in ctx.api.get("/api/lan")["ports"]
+                if p["role"] in ("wan", "lan")}
+    except Exception:
+        return {}
+
+
+def monitor_traffic(ctx, pos, named):
+    name = named.get("interface") or (pos[0] if pos else None)
+    if not name:
+        raise CliError("monitor-traffic eth0  (Ctrl-C — стоп)")
+    once = yes(named.get("once"))
+    prev = None
+    try:
+        while True:
+            cur = next((i for i in ctx.api.get("/api/interfaces") if i["name"] == name), None)
+            if not cur:
+                raise CliError(f"no such item ({name})")
+            now = time.monotonic()
+            if prev:
+                dt = now - prev[0]
+                ctx.out(f"  name: {name}   rx-bits-per-second: {fmt_bps((cur['rx_bytes'] - prev[1]) / dt):>10}"
+                        f"   tx-bits-per-second: {fmt_bps((cur['tx_bytes'] - prev[2]) / dt):>10}")
+                if once:
+                    return
+            prev = (now, cur["rx_bytes"], cur["tx_bytes"])
+            ctx.sleep(1)
+    except KeyboardInterrupt:
+        pass
+
+
+def bridge_print(ctx, pos, named):
+    lan = ctx.api.get("/api/lan")
+    table(ctx, ["name", "address", "ports"],
+          [["br-lan", lan["config"]["address"], [p["name"] for p in lan["ports"] if p["role"] == "lan"]]],
+          flags=["R" if lan["active"] else "X"], legend="R - running, X - disabled")
+
+
+def bridge_port_print(ctx, pos, named):
+    ports = [p for p in ctx.api.get("/api/lan")["ports"] if p["role"] == "lan"]
+    table(ctx, ["interface", "bridge", "mac-address"], [[p["name"], "br-lan", p.get("mac")] for p in ports],
+          flags=["" if p["link_up"] else "I" for p in ports], legend="I - inactive (нет линка)")
+
+
+def _vpn_status(ctx, kind):
+    st = ctx.api.get(f"/api/vpn/{kind}")
+    c = st["config"]
+    hs = st.get("latest_handshake")
+    return st, c, (f"{int(time.time() - hs)}s" if hs else None)
+
+
+def wireguard_print(ctx, pos, named):
+    rows, flags = [], []
+    for kind, iface in (("wireguard", "wg0"), ("amneziawg", "awg0")):
+        st, c, _ = _vpn_status(ctx, kind)
+        rows.append([iface, kind, c["mtu"], c.get("addresses"), st.get("public_key")])
+        flags.append(("R" if st.get("active") else "") + ("" if c["enabled"] else "X"))
+    table(ctx, ["name", "type", "mtu", "address", "public-key"], rows, flags=flags, legend="X - disabled, R - running")
+
+
+def wireguard_peers_print(ctx, pos, named):
+    rows = []
+    for kind, iface in (("wireguard", "wg0"), ("amneziawg", "awg0")):
+        st, c, hs = _vpn_status(ctx, kind)
+        if c.get("peer_public_key"):
+            rows.append([iface, c.get("endpoint"), c.get("allowed_ips"), hs, fmt_bytes(st.get("rx_bytes")),
+                         fmt_bytes(st.get("tx_bytes"))])
+    table(ctx, ["interface", "endpoint", "allowed-address", "last-handshake", "rx", "tx"], rows)
+
+
+def l2tp_client_print(ctx, pos, named):
+    st = ctx.api.get("/api/vpn/l2tp")
+    c = st["config"]
+    table(ctx, ["name", "connect-to", "user", "use-ipsec", "local-address", "remote-address"],
+          [["l2tp0", c.get("server"), c.get("username"), "yes", st.get("local_ip"), st.get("remote_ip")]],
+          flags=[("R" if st.get("connected") else "") + ("" if c["enabled"] else "X")],
+          legend="X - disabled, R - running")
+
+
+# --- /ip address, /ip route: общие print / set / enable / disable / remove / comment ---------------------------
+def _crud(base: str, menu: str, fields: dict[str, str]):
+    """Команды set/enable/disable/remove/comment для меню с id. fields: параметр CLI -> поле API."""
+    def set_(ctx, pos, named):
+        items = pick(ctx, menu, pos, named)
+        _not_dynamic(items)
+        body = {api: named[cli] for cli, api in fields.items() if cli in named}
+        if "distance" in body:
+            body["distance"] = int(body["distance"])
+        if "disabled" in named:
+            body["disabled"] = yes(named["disabled"])
+        if not body:
+            raise CliError("нечего менять: укажите параметры, например set 0 comment=...")
+        for i in items:
+            ctx.api.patch(f"{base}/{i['id']}", body)
+
+    def toggle(disabled):
+        def fn(ctx, pos, named):
+            items = pick(ctx, menu, pos, named)
+            _not_dynamic(items)
+            for i in items:
+                ctx.api.patch(f"{base}/{i['id']}", {"disabled": disabled})
+        return fn
+
+    def remove(ctx, pos, named):
+        items = pick(ctx, menu, pos, named)
+        _not_dynamic(items)
+        for i in items:
+            ctx.api.delete(f"{base}/{i['id']}")
+
+    def comment(ctx, pos, named):
+        items = pick(ctx, menu, pos, named)
+        _not_dynamic(items)
+        for i in items:
+            ctx.api.patch(f"{base}/{i['id']}", {"comment": named.get("comment", "")})
+
+    n = ("numbers",)
+    return {
+        "set": Cmd(set_, "изменить: set 0 параметр=значение", n + tuple(fields) + ("disabled",),
+                   {"disabled": YESNO, **{k: v for k, v in IFACE.items() if k in fields}}),
+        "enable": Cmd(toggle(False), "включить: enable 0", n),
+        "disable": Cmd(toggle(True), "выключить: disable 0", n),
+        "remove": Cmd(remove, "удалить: remove 0,2", n),
+        "comment": Cmd(comment, 'комментарий: comment 0 comment="текст"', n + ("comment",)),
+    }
+
+
+def address_print(ctx, pos, named):
     items = ctx.api.get("/api/ip/addresses")
-    ctx.numbers["/ip address"] = [i.get("id") for i in items]
+    ctx.numbers["/ip address"] = items
     table(ctx, ["address", "network", "interface", "comment"],
           [[i["address"], i["network"], i["interface"], i.get("comment")] for i in items],
           flags=[("X" if i["disabled"] else "") + ("I" if i["invalid"] else "") + ("D" if i["dynamic"] else "")
-                 for i in items],
-          legend="X - disabled, I - invalid, D - dynamic")
+                 for i in items], legend="X - disabled, I - invalid, D - dynamic")
 
 
-def address_add(ctx: Ctx, pos, named):
+def address_add(ctx, pos, named):
     require(named, "address", "interface")
     ctx.api.post("/api/ip/addresses", {"address": named["address"], "interface": named["interface"],
                                        "comment": named.get("comment"), "disabled": yes(named.get("disabled"))})
 
 
-def _dynamic_guard(ids):
-    if any(i is None for i in ids):
-        raise CliError("dynamic item can not be changed (он не из конфигурации)")
-
-
-def address_remove(ctx: Ctx, pos, named):
-    ids = parse_numbers(ctx, "/ip address", pos, named)
-    _dynamic_guard(ids)
-    for i in ids:
-        ctx.api.delete(f"/api/ip/addresses/{i}")
-
-
-def _toggle(path: str, menu: str, disabled: bool):
-    def fn(ctx: Ctx, pos, named):
-        ids = parse_numbers(ctx, menu, pos, named)
-        _dynamic_guard(ids)
-        for i in ids:
-            ctx.api.patch(f"{path}/{i}", {"disabled": disabled})
-    return fn
-
-
-# --- /ip route -----------------------------------------------------------------------------------------------
-def route_print(ctx: Ctx, pos, named):
+def route_print(ctx, pos, named):
     items = ctx.api.get("/api/ip/routes")
-    ctx.numbers["/ip route"] = [i.get("id") for i in items]
+    ctx.numbers["/ip route"] = items
     table(ctx, ["dst-address", "gateway", "distance", "interface", "comment"],
           [[i["dst_address"], i["gateway"], i["distance"], i.get("interface"), i.get("comment")] for i in items],
           flags=[("X" if i["disabled"] else "") + ("D" if i["dynamic"] else "") + ("A" if i["active"] else "")
@@ -203,7 +396,7 @@ def route_print(ctx: Ctx, pos, named):
           legend="X - disabled, D - dynamic, A - active, C - connected, S - static")
 
 
-def route_add(ctx: Ctx, pos, named):
+def route_add(ctx, pos, named):
     require(named, "gateway")
     body = {"dst_address": named.get("dst-address", "0.0.0.0/0"), "gateway": named["gateway"],
             "comment": named.get("comment"), "disabled": yes(named.get("disabled"))}
@@ -212,69 +405,139 @@ def route_add(ctx: Ctx, pos, named):
     ctx.api.post("/api/ip/routes", body)
 
 
-def route_remove(ctx: Ctx, pos, named):
-    ids = parse_numbers(ctx, "/ip route", pos, named)
-    _dynamic_guard(ids)
-    for i in ids:
-        ctx.api.delete(f"/api/ip/routes/{i}")
+# --- /ip arp, /ip neighbor -------------------------------------------------------------------------------
+def arp_print(ctx, pos, named):
+    items = ctx.api.get("/api/tools/neighbors")
+    table(ctx, ["address", "mac-address", "interface", "host-name", "vendor", "status"],
+          [[n["ip"], n.get("mac"), n.get("interface"), n.get("name"), n.get("vendor"), (n.get("state") or "").lower()]
+           for n in items],
+          flags=["D" if n.get("mac") else "I" for n in items], legend="D - dynamic, I - incomplete")
 
 
-# --- /ip dhcp-server -------------------------------------------------------------------------------------------
-def dhcp_print(ctx: Ctx, pos, named):
+# --- /ip dhcp-server, pool, dhcp-client ----------------------------------------------------------------------
+def dhcp_print(ctx, pos, named):
     c = ctx.api.get("/api/lan")["config"]
-    kv(ctx, [("enabled", c["enabled"] and c["dhcp_enabled"]), ("interface", "br-lan"), ("address", c["address"]),
-             ("pool", f'{c["pool_start"]}-{c["pool_end"]}'), ("lease-time", c["lease_time"])])
+    table(ctx, ["name", "interface", "address-pool", "lease-time"],
+          [["dhcp-lan", "br-lan", "pool-lan", c["lease_time"]]],
+          flags=["" if c["enabled"] and c["dhcp_enabled"] else "X"], legend="X - disabled")
 
 
-def lease_print(ctx: Ctx, pos, named):
+def dhcp_network_print(ctx, pos, named):
+    c = ctx.api.get("/api/lan")["config"]
+    iface = ipaddress.ip_interface(c["address"])
+    table(ctx, ["address", "gateway", "dns-server", "domain"],
+          [[str(iface.network), str(iface.ip), str(iface.ip), "lan"]])
+
+
+def pool_print(ctx, pos, named):
+    c = ctx.api.get("/api/lan")["config"]
+    table(ctx, ["name", "ranges"], [["pool-lan", f'{c["pool_start"]}-{c["pool_end"]}']])
+
+
+def lease_print(ctx, pos, named):
     lan = ctx.api.get("/api/lan")
     leases = {l["mac"]: l for l in lan["leases"]}
-    rows, flags, ids = [], [], []
+    rows, flags, items = [], [], []
     for s in lan["static_leases"]:                                    # закреплённые — первыми
         l = leases.pop(s["mac"], {})
         rows.append([s["ip"], s["mac"], s.get("name") or l.get("hostname"), l.get("vendor"),
                      "bound" if l else "waiting"])
         flags.append("S")
-        ids.append(("static", s["mac"], s["ip"], s.get("name")))
+        items.append({"kind": "static", "mac": s["mac"], "ip": s["ip"], "name": s.get("name")})
     for l in leases.values():
         rows.append([l["ip"], l["mac"], l.get("hostname"), l.get("vendor"), "bound"])
         flags.append("D")
-        ids.append(("dynamic", l["mac"], l["ip"], l.get("hostname")))
-    ctx.numbers["/ip dhcp-server lease"] = ids
+        items.append({"kind": "dynamic", "mac": l["mac"], "ip": l["ip"], "name": l.get("hostname")})
+    ctx.numbers["/ip dhcp-server lease"] = items
     table(ctx, ["address", "mac-address", "host-name", "vendor", "status"], rows, flags=flags,
           legend="S - static (закреплён), D - dynamic")
 
 
-def lease_make_static(ctx: Ctx, pos, named):
-    for kind, mac, ip, name in parse_numbers(ctx, "/ip dhcp-server lease", pos, named):
-        if kind == "static":
-            continue
-        ctx.api.post("/api/lan/static-leases", {"mac": mac, "ip": ip, "name": name})
+def lease_make_static(ctx, pos, named):
+    for i in pick(ctx, "/ip dhcp-server lease", pos, named):
+        if i["kind"] == "dynamic":
+            ctx.api.post("/api/lan/static-leases", {"mac": i["mac"], "ip": i["ip"], "name": i["name"]})
 
 
-def lease_add(ctx: Ctx, pos, named):
+def lease_add(ctx, pos, named):
     require(named, "mac-address", "address")
     ctx.api.post("/api/lan/static-leases", {"mac": named["mac-address"], "ip": named["address"],
                                             "name": named.get("comment") or named.get("host-name")})
 
 
-def lease_remove(ctx: Ctx, pos, named):
-    for kind, mac, ip, name in parse_numbers(ctx, "/ip dhcp-server lease", pos, named):
-        if kind != "static":
-            raise CliError(f"{ip}: динамическая аренда — удалить можно только закреплённую")
-        ctx.api.delete(f"/api/lan/static-leases/{mac}")
+def lease_set(ctx, pos, named):
+    for i in pick(ctx, "/ip dhcp-server lease", pos, named):
+        if i["kind"] != "static":
+            raise CliError(f"{i['ip']}: сначала make-static")
+        ctx.api.put(f"/api/lan/static-leases/{i['mac']}", {
+            "mac": i["mac"], "ip": named.get("address", i["ip"]),
+            "name": named.get("comment", named.get("host-name", i["name"]))})
+
+
+def lease_remove(ctx, pos, named):
+    for i in pick(ctx, "/ip dhcp-server lease", pos, named):
+        if i["kind"] != "static":
+            raise CliError(f"{i['ip']}: динамическая аренда — удалить можно только закреплённую")
+        ctx.api.delete(f"/api/lan/static-leases/{i['mac']}")
+
+
+def dhcp_client_print(ctx, pos, named):
+    w = ctx.api.get("/api/wan")
+    mode = w["config"]["mode"]
+    table(ctx, ["interface", "use-peer-dns", "add-default-route", "status", "address", "gateway"],
+          [[w["interface"], "yes", "yes", w["dhcp_state"] if mode == "dhcp" else "-", w["addresses"], w["gateway"]]],
+          flags=["" if mode == "dhcp" else "X"], legend="X - disabled (WAN не в режиме DHCP)")
+
+
+def dhcp_client_renew(ctx, pos, named):
+    ctx.api.post("/api/wan/renew")
 
 
 # --- /ip firewall ----------------------------------------------------------------------------------------------
-ZONES = {"any": "", "wan": "WAN", "lan": "LAN", "vpn": "VPN"}
+ZONE_OUT = {"any": "", "wan": "WAN", "lan": "LAN", "vpn": "VPN"}
+ZONE_IN = {"wan": "wan", "lan": "lan", "vpn": "vpn", "all": "any", "any": "any", "": "any"}
+RULE_FIELDS = ("chain", "action", "protocol", "src-address", "dst-address", "src-port", "dst-port",
+               "in-interface-list", "out-interface-list", "comment", "disabled")
+RULE_VALUES = {"chain": ["input", "forward"], "action": ["accept", "drop", "reject"],
+               "protocol": ["tcp", "udp", "icmp"], "in-interface-list": ZONE_LISTS,
+               "out-interface-list": ZONE_LISTS, "disabled": YESNO}
 
 
-def filter_print(ctx: Ctx, pos, named):
+def _rule_body(r: dict) -> dict:
+    return {k: r.get(k) for k in ("chain", "enabled", "action", "in_zone", "out_zone", "src", "dst", "protocol",
+                                  "src_ports", "dst_ports", "description")}
+
+
+def _rule_from_args(named: dict, base: dict | None = None) -> dict:
+    body = dict(base or {"chain": "input", "enabled": True, "action": "accept", "in_zone": "any",
+                         "out_zone": "any", "protocol": "all"})
+    m = {"chain": "chain", "action": "action", "protocol": "protocol", "src-address": "src", "dst-address": "dst",
+         "src-port": "src_ports", "dst-port": "dst_ports", "comment": "description"}
+    for cli, api in m.items():
+        if cli in named:
+            body[api] = named[cli] or None
+    for cli, api in (("in-interface-list", "in_zone"), ("out-interface-list", "out_zone")):
+        if cli in named:
+            zone = ZONE_IN.get(named[cli].lower())
+            if not zone:
+                raise CliError(f"{cli}: WAN, LAN, VPN или all")
+            body[api] = zone
+    if "disabled" in named:
+        body["enabled"] = not yes(named["disabled"])
+    if body.get("protocol") in (None, "", "all") and (body.get("src_ports") or body.get("dst_ports")):
+        raise CliError("порты задаются вместе с protocol=tcp или protocol=udp")
+    if not body.get("protocol"):
+        body["protocol"] = "all"
+    return body
+
+
+def filter_print(ctx, pos, named):
     fw = ctx.api.get("/api/firewall")
     rules = fw["rules"]
-    table(ctx, ["chain", "action", "in", "out", "src-address", "dst-address", "protocol", "dst-port", "packets",
-                "comment"],
-          [[r["chain"], r["action"], ZONES[r["in_zone"]], ZONES[r["out_zone"]], r.get("src"), r.get("dst"),
+    ctx.numbers["/ip firewall filter"] = rules
+    table(ctx, ["chain", "action", "in-list", "out-list", "src-address", "dst-address", "protocol", "dst-port",
+                "packets", "comment"],
+          [[r["chain"], r["action"], ZONE_OUT[r["in_zone"]], ZONE_OUT[r["out_zone"]], r.get("src"), r.get("dst"),
             "" if r["protocol"] == "all" else r["protocol"], r.get("dst_ports"), r["packets"], r.get("description")]
            for r in rules],
           flags=["X" if not r["enabled"] else "" for r in rules], legend="X - disabled")
@@ -284,10 +547,71 @@ def filter_print(ctx: Ctx, pos, named):
             ctx.out(f"    {chain}: {line}")
 
 
-def nat_print(ctx: Ctx, pos, named):
+def filter_add(ctx, pos, named):
+    ctx.api.post("/api/firewall/rules", _rule_from_args(named))
+
+
+def filter_set(ctx, pos, named):
+    for r in pick(ctx, "/ip firewall filter", pos, named):
+        ctx.api.put(f"/api/firewall/rules/{r['id']}", _rule_from_args(named, _rule_body(r)))
+
+
+def _filter_toggle(enabled: bool):
+    def fn(ctx, pos, named):
+        for r in pick(ctx, "/ip firewall filter", pos, named):
+            ctx.api.put(f"/api/firewall/rules/{r['id']}", {**_rule_body(r), "enabled": enabled})
+    return fn
+
+
+def filter_remove(ctx, pos, named):
+    for r in pick(ctx, "/ip firewall filter", pos, named):
+        ctx.api.delete(f"/api/firewall/rules/{r['id']}")
+
+
+def filter_move(ctx, pos, named):
+    """move 3 1 — поставить правило 3 на место правила 1 (внутри своей цепочки)."""
+    if len(pos) < 2 and "destination" not in named:
+        raise CliError("move <номер> <куда>, например: move 3 0")
+    rule = pick(ctx, "/ip firewall filter", pos[:1], {})[0]
+    dest = pick(ctx, "/ip firewall filter", [named.get("destination", pos[-1])], {})[0]
+    if rule["chain"] != dest["chain"]:
+        raise CliError("двигать можно только внутри своей цепочки (input или forward)")
+    same = [r["id"] for r in ctx.numbers["/ip firewall filter"] if r["chain"] == rule["chain"]]
+    steps = same.index(dest["id"]) - same.index(rule["id"])
+    for _ in range(abs(steps)):
+        ctx.api.post(f"/api/firewall/rules/{rule['id']}/move", {"direction": "down" if steps > 0 else "up"})
+
+
+NAT_FIELDS = ("chain", "action", "protocol", "dst-port", "to-addresses", "to-ports", "src-address", "comment",
+              "disabled")
+
+
+def _nat_from_args(named: dict, base: dict | None = None) -> dict:
+    body = dict(base or {"enabled": True, "protocol": "tcp"})
+    if named.get("chain", "dstnat") != "dstnat" or named.get("action", "dst-nat") != "dst-nat":
+        raise CliError("поддерживается проброс портов: chain=dstnat action=dst-nat (srcnat делается автоматически)")
+    for cli, api in (("protocol", "protocol"), ("dst-port", "wan_port"), ("to-addresses", "to_ip"),
+                     ("src-address", "src"), ("comment", "description")):
+        if cli in named:
+            body[api] = named[cli] or None
+    if "to-ports" in named:
+        body["to_port"] = int(named["to-ports"]) if named["to-ports"] else None
+    if "disabled" in named:
+        body["enabled"] = not yes(named["disabled"])
+    if body.get("protocol") in ("tcp,udp", "udp,tcp"):
+        body["protocol"] = "tcp+udp"
+    return body
+
+
+def _nat_body(f: dict) -> dict:
+    return {k: f.get(k) for k in ("enabled", "protocol", "wan_port", "to_ip", "to_port", "src", "description")}
+
+
+def nat_print(ctx, pos, named):
     fw = ctx.api.get("/api/firewall")
     fwd = fw["forwards"]
-    table(ctx, ["chain", "action", "protocol", "dst-port", "to-address", "to-port", "src-address", "packets",
+    ctx.numbers["/ip firewall nat"] = fwd
+    table(ctx, ["chain", "action", "protocol", "dst-port", "to-addresses", "to-ports", "src-address", "packets",
                 "comment"],
           [["dstnat", "dst-nat", f["protocol"], f["wan_port"], f["to_ip"], f.get("to_port"), f.get("src"),
             f["packets"], f.get("description")] for f in fwd],
@@ -296,23 +620,55 @@ def nat_print(ctx: Ctx, pos, named):
         ctx.out(f";;; srcnat: {line}")
 
 
-# --- /ip dns ---------------------------------------------------------------------------------------------------
-def dns_print(ctx: Ctx, pos, named):
+def nat_add(ctx, pos, named):
+    require(named, "dst-port", "to-addresses")
+    ctx.api.post("/api/firewall/forwards", _nat_from_args(named))
+
+
+def nat_set(ctx, pos, named):
+    for f in pick(ctx, "/ip firewall nat", pos, named):
+        ctx.api.put(f"/api/firewall/forwards/{f['id']}", _nat_from_args(named, _nat_body(f)))
+
+
+def _nat_toggle(enabled: bool):
+    def fn(ctx, pos, named):
+        for f in pick(ctx, "/ip firewall nat", pos, named):
+            ctx.api.put(f"/api/firewall/forwards/{f['id']}", {**_nat_body(f), "enabled": enabled})
+    return fn
+
+
+def nat_remove(ctx, pos, named):
+    for f in pick(ctx, "/ip firewall nat", pos, named):
+        ctx.api.delete(f"/api/firewall/forwards/{f['id']}")
+
+
+# --- /ip dns, /ip service ---------------------------------------------------------------------------------------
+def dns_print(ctx, pos, named):
     w = ctx.api.get("/api/wan")
     lan = ctx.api.get("/api/lan")
     kv(ctx, [("servers", w["dns"]), ("allow-remote-requests", lan["dns_dhcp_running"]),
-             ("listen", lan["config"]["address"].split("/")[0] if lan["active"] else "-")])
+             ("listen", lan["config"]["address"].split("/")[0] if lan["active"] else "-"), ("domain", "lan")])
 
 
-# --- /wan, /lan, /vpn ---------------------------------------------------------------------------------------------
-def wan_print(ctx: Ctx, pos, named):
+def service_print(ctx, pos, named):
+    wan_open = ctx.api.get("/api/lan")["config"]["wan_management"]
+    api_port, ssh_port = os.getenv("API_PORT", "8000"), os.getenv("CLI_SSH_PORT", "22")
+    table(ctx, ["name", "port", "available-from"],
+          [["www", api_port, "LAN, VPN" + (", WAN" if wan_open else "")],
+           ["ssh", ssh_port, "LAN, VPN" + (", WAN" if wan_open else "")]],
+          legend=None)
+    ctx.out(";;; доступ с WAN включается в веб-интерфейсе: LAN -> «Разрешить управление со стороны WAN»")
+
+
+# --- /wan, /lan, /vpn ----------------------------------------------------------------------------------------------
+def wan_print(ctx, pos, named):
     w = ctx.api.get("/api/wan")
     kv(ctx, [("interface", w["interface"]), ("mode", w["config"]["mode"]), ("link", w["link_up"]),
              ("address", w["addresses"]), ("gateway", w["gateway"]), ("dns", w["dns"]),
              ("dhcp-status", w["dhcp_state"]), ("mac-address", w.get("mac"))])
 
 
-def wan_set(ctx: Ctx, pos, named):
+def wan_set(ctx, pos, named):
     cfg = ctx.api.get("/api/wan")["config"]
     if "dns" in named:
         cfg["dns"] = [d for d in named.pop("dns").split(",") if d]
@@ -322,11 +678,7 @@ def wan_set(ctx: Ctx, pos, named):
     ctx.api.put("/api/wan", cfg)
 
 
-def wan_renew(ctx: Ctx, pos, named):
-    ctx.api.post("/api/wan/renew")
-
-
-def lan_print(ctx: Ctx, pos, named):
+def lan_print(ctx, pos, named):
     l = ctx.api.get("/api/lan")
     c = l["config"]
     kv(ctx, [("enabled", c["enabled"]), ("running", l["active"]), ("address", c["address"]),
@@ -339,7 +691,7 @@ def lan_print(ctx: Ctx, pos, named):
 VPN_NAMES = {"wireguard": "WireGuard", "amneziawg": "AmneziaWG", "l2tp": "L2TP/IPsec"}
 
 
-def vpn_print(ctx: Ctx, pos, named):
+def vpn_print(ctx, pos, named):
     kind = ctx.api.get("/api/vpn")["enabled"]
     if not kind:
         ctx.out("туннель выключен (включается в веб-интерфейсе: VPN)")
@@ -357,8 +709,8 @@ def vpn_print(ctx: Ctx, pos, named):
              ("public-key", st.get("public_key"))])
 
 
-# --- /system ------------------------------------------------------------------------------------------------------
-def resource_print(ctx: Ctx, pos, named):
+# --- /system, /user, /password, /log ---------------------------------------------------------------------------------
+def resource_print(ctx, pos, named):
     r = ctx.api.get("/api/system/resource")
     kv(ctx, [("uptime", fmt_uptime(r["uptime"])), ("version", r["version"]), ("mode", r["mode"]),
              ("board-name", r.get("model")), ("architecture-name", r["arch"]), ("cpu-count", r["cpu_count"]),
@@ -371,22 +723,38 @@ def resource_print(ctx: Ctx, pos, named):
              ("kernel", r["kernel"])])
 
 
-def identity_print(ctx: Ctx, pos, named):
+def identity_print(ctx, pos, named):
     kv(ctx, [("name", ctx.api.get("/api/system/resource")["identity"])])
 
 
-def identity_set(ctx: Ctx, pos, named):
+def identity_set(ctx, pos, named):
     require(named, "name")
     ctx.api.put("/api/system/identity", {"identity": named["name"]})
 
 
-def system_reboot(ctx: Ctx, pos, named):
+def clock_print(ctx, pos, named):
+    t = ctx.api.get("/api/system/resource")["time"]          # 2026-11-10T20:46:00+02:00
+    kv(ctx, [("time", t[11:19]), ("date", t[:10]), ("gmt-offset", t[19:] or "+00:00")])
+
+
+def routerboard_print(ctx, pos, named):
+    r = ctx.api.get("/api/system/resource")
+    kv(ctx, [("routerboard", "no"), ("model", r.get("model")), ("architecture", r["arch"]),
+             ("firmware", f'OutpostGate {r["version"]}'), ("kernel", r["kernel"])])
+
+
+def package_print(ctx, pos, named):
+    r = ctx.api.get("/api/system/resource")
+    table(ctx, ["name", "version"], [["outpost-gate", r["version"]]])
+
+
+def system_reboot(ctx, pos, named):
     if ctx.confirm("Reboot, yes? [y/N]: "):
         ctx.out(ctx.api.post("/api/system/restart").get("message", "перезапуск"))
         raise Quit()
 
 
-def system_shell(ctx: Ctx, pos, named):
+def system_shell(ctx, pos, named):
     if ctx.role != "full":
         raise CliError("not enough permissions (нужна роль full)")
     if not ctx.shell:
@@ -394,12 +762,61 @@ def system_shell(ctx: Ctx, pos, named):
     ctx.shell()
 
 
-def export(ctx: Ctx, pos, named):
+def user_print(ctx, pos, named):
+    users = ctx.api.get("/api/system/users")
+    ctx.numbers["/user"] = users
+    table(ctx, ["name", "group", "password"],
+          [[u["name"], u["role"], "не задан" if not u.get("has_password", True)
+            else "сменит при входе" if u.get("must_change") else "задан"] for u in users])
+
+
+def user_add(ctx, pos, named):
+    require(named, "name")
+    password = named.get("password") or ctx.secret("password: ")
+    ctx.api.post("/api/system/users", {"name": named["name"], "password": password,
+                                       "role": named.get("group", "full")})
+
+
+def user_set(ctx, pos, named):
+    for u in pick(ctx, "/user", pos, named):
+        body = {}
+        if "group" in named:
+            body["role"] = named["group"]
+        if "password" in named:
+            body["password"] = named["password"]
+        ctx.api.put(f"/api/system/users/{u['name']}", body)
+
+
+def user_remove(ctx, pos, named):
+    for u in pick(ctx, "/user", pos, named):
+        ctx.api.delete(f"/api/system/users/{u['name']}")
+
+
+def password(ctx, pos, named):
+    old = named.get("old-password")
+    if old is None:
+        old = ctx.secret("old-password: ")
+    new = named.get("new-password") or ctx.secret("new-password: ")
+    confirm = named.get("confirm-new-password") or ctx.secret("confirm-new-password: ")
+    if new != confirm:
+        raise CliError("failure: new passwords do not match (пароли не совпадают)")
+    ctx.api.post("/api/auth/password", {"old": old, "new": new})
+    ctx.out("пароль изменён — остальные сессии завершены")
+
+
+def log_print(ctx, pos, named):
+    items = list(reversed(ctx.api.get("/api/system/audit?limit=" + str(int(named.get("count", 50))))))
+    for e in items:
+        t = e["time"].replace("T", " ")[:19]
+        ctx.out(f"{t} {e['user']:<10} {e['method']:<8} {e['path']} {'' if e['status'] < 400 else '[' + str(e['status']) + ']'}")
+
+
+def export(ctx, pos, named):
     ctx.out(ctx.api.call("GET", "/api/system/backup", raw=True).rstrip())
 
 
-# --- диагностика (запускается прямо на роутере) -------------------------------------------------------------------
-def _run_live(ctx: Ctx, cmd: list[str]) -> None:
+# --- диагностика (на самом роутере) ----------------------------------------------------------------------------------
+def _run_live(ctx, cmd: list[str]) -> None:
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except FileNotFoundError:
@@ -427,7 +844,7 @@ def _iface(named) -> str | None:
     return iface
 
 
-def ping(ctx: Ctx, pos, named):
+def ping(ctx, pos, named):
     host = _host(pos, named)
     count = int(named.get("count", 4))
     cmd = ["ping", "-6" if ":" in host else "-4", "-n", "-c", str(max(1, min(count, 1000)))]
@@ -436,7 +853,7 @@ def ping(ctx: Ctx, pos, named):
     _run_live(ctx, cmd + [host])
 
 
-def traceroute(ctx: Ctx, pos, named):
+def traceroute(ctx, pos, named):
     host = _host(pos, named)
     cmd = ["traceroute", "-I", "-n", "-q", "1", "-w", "2", "-m", str(int(named.get("max-hops", 30)))]
     if iface := _iface(named):
@@ -444,64 +861,165 @@ def traceroute(ctx: Ctx, pos, named):
     _run_live(ctx, cmd + [host])
 
 
-def quit_cmd(ctx: Ctx, pos, named):
+def dns_lookup(ctx, pos, named):
+    name = named.get("name") or (pos[0] if pos else "")
+    if not name:
+        raise CliError("dns-lookup name=example.com")
+    r = ctx.api.get(f"/api/tools/dns?host={urllib.parse.quote(name)}")
+    if r.get("error"):
+        raise CliError(f"failure: {r['error']}")
+    for a in r["addresses"]:
+        ctx.out(f"{r['host']}  {a}")
+
+
+def ip_scan(ctx, pos, named):
+    """/tool ip-scan address-range=192.168.88.0/24 interface=br-lan — как в RouterOS (ping + ARP)."""
+    from app.services import tools
+    params = {"network": named.get("address-range") or (pos[0] if pos else None), "interface": named.get("interface")}
+
+    async def run():
+        rows = []
+        async for ev in tools.scan(params):
+            if ev["type"] == "info":
+                ctx.out(ev["text"])
+            elif ev["type"] == "row":
+                rows.append(ev["row"])
+        return rows
+
+    try:
+        rows = asyncio.run(run())
+    except tools.ToolError as e:
+        raise CliError(str(e)) from e
+    except KeyboardInterrupt:
+        return
+    table(ctx, ["address", "mac-address", "host-name", "vendor", "time"],
+          [[r["ip"], r.get("mac"), r.get("name"), r.get("vendor"), f'{r["ping_ms"]}ms' if r.get("ping_ms") else "arp"]
+           for r in rows], numbered=False)
+
+
+def quit_cmd(ctx, pos, named):
     raise Quit()
 
 
-# --- дерево меню -----------------------------------------------------------------------------------------------------
-PRINT = "показать"
+# --- дерево меню ------------------------------------------------------------------------------------------------------
+P = "показать"
+
+
+def pr(fn):
+    return Cmd(fn, P, ("detail",))
+
+
 ROOT = Menu("OutpostGate", {
-    "interface": Menu("интерфейсы", {"print": Cmd(interface_print, PRINT)}),
+    "interface": Menu("интерфейсы", {
+        "print": pr(interface_print),
+        "monitor-traffic": Cmd(monitor_traffic, "скорость интерфейса: monitor-traffic eth0 (Ctrl-C — стоп)",
+                               ("interface", "once"), {**IFACE, "once": YESNO}),
+        "ethernet": Menu("физические порты", {"print": pr(interface_print)}),
+        "bridge": Menu("мост LAN", {"print": pr(bridge_print), "port": Menu("порты моста", {"print": pr(bridge_port_print)})}),
+        "wireguard": Menu("WireGuard / AmneziaWG", {"print": pr(wireguard_print),
+                                                    "peers": Menu("сервер", {"print": pr(wireguard_peers_print)})}),
+        "l2tp-client": Menu("L2TP/IPsec", {"print": pr(l2tp_client_print)}),
+    }),
     "ip": Menu("IP", {
         "address": Menu("IP-адреса", {
-            "print": Cmd(address_print, PRINT),
-            "add": Cmd(address_add, "добавить адрес", ("address", "interface", "comment", "disabled")),
-            "remove": Cmd(address_remove, "удалить: remove 0,1", ("numbers",)),
-            "enable": Cmd(_toggle("/api/ip/addresses", "/ip address", False), "включить", ("numbers",)),
-            "disable": Cmd(_toggle("/api/ip/addresses", "/ip address", True), "выключить", ("numbers",)),
+            "print": pr(address_print),
+            "add": Cmd(address_add, "добавить: add address=10.0.0.1/24 interface=eth2",
+                       ("address", "interface", "comment", "disabled"), {**IFACE, "disabled": YESNO}),
+            **_crud("/api/ip/addresses", "/ip address", {"address": "address", "interface": "interface",
+                                                          "comment": "comment"}),
         }),
         "route": Menu("маршруты", {
-            "print": Cmd(route_print, PRINT),
-            "add": Cmd(route_add, "добавить маршрут", ("dst-address", "gateway", "distance", "comment", "disabled")),
-            "remove": Cmd(route_remove, "удалить", ("numbers",)),
-            "enable": Cmd(_toggle("/api/ip/routes", "/ip route", False), "включить", ("numbers",)),
-            "disable": Cmd(_toggle("/api/ip/routes", "/ip route", True), "выключить", ("numbers",)),
+            "print": pr(route_print),
+            "add": Cmd(route_add, "добавить: add dst-address=10.0.0.0/8 gateway=192.168.88.254",
+                       ("dst-address", "gateway", "distance", "comment", "disabled"), {"disabled": YESNO}),
+            **_crud("/api/ip/routes", "/ip route", {"dst-address": "dst_address", "gateway": "gateway",
+                                                     "distance": "distance", "comment": "comment"}),
         }),
+        "arp": Menu("таблица ARP", {"print": pr(arp_print)}),
+        "neighbor": Menu("соседи (ARP)", {"print": pr(arp_print)}),
+        "pool": Menu("пулы адресов", {"print": pr(pool_print)}),
         "dhcp-server": Menu("DHCP-сервер", {
-            "print": Cmd(dhcp_print, PRINT),
+            "print": pr(dhcp_print),
+            "network": Menu("сети DHCP", {"print": pr(dhcp_network_print)}),
             "lease": Menu("аренды и закреплённые адреса", {
-                "print": Cmd(lease_print, PRINT),
-                "make-static": Cmd(lease_make_static, "закрепить адрес за устройством", ("numbers",)),
-                "add": Cmd(lease_add, "закрепить вручную", ("mac-address", "address", "comment")),
-                "remove": Cmd(lease_remove, "открепить", ("numbers",)),
+                "print": pr(lease_print),
+                "make-static": Cmd(lease_make_static, "закрепить: make-static 3", ("numbers",)),
+                "add": Cmd(lease_add, "закрепить вручную: add mac-address=... address=...",
+                           ("mac-address", "address", "comment")),
+                "set": Cmd(lease_set, "изменить: set 0 address=... comment=...", ("numbers", "address", "comment")),
+                "remove": Cmd(lease_remove, "открепить: remove 0", ("numbers",)),
             }),
         }),
-        "dns": Menu("DNS", {"print": Cmd(dns_print, PRINT)}),
+        "dhcp-client": Menu("DHCP-клиент WAN", {"print": pr(dhcp_client_print),
+                                                 "renew": Cmd(dhcp_client_renew, "обновить аренду")}),
+        "dns": Menu("DNS", {"print": Cmd(dns_print, P)}),
+        "service": Menu("службы управления", {"print": pr(service_print)}),
         "firewall": Menu("фаервол", {
-            "filter": Menu("правила", {"print": Cmd(filter_print, PRINT)}),
-            "nat": Menu("NAT и проброс портов", {"print": Cmd(nat_print, PRINT)}),
+            "filter": Menu("правила", {
+                "print": pr(filter_print),
+                "add": Cmd(filter_add, "add chain=input protocol=tcp dst-port=22 src-address=... action=accept",
+                           RULE_FIELDS, RULE_VALUES),
+                "set": Cmd(filter_set, "изменить: set 0 параметр=значение", ("numbers",) + RULE_FIELDS, RULE_VALUES),
+                "enable": Cmd(_filter_toggle(True), "включить", ("numbers",)),
+                "disable": Cmd(_filter_toggle(False), "выключить", ("numbers",)),
+                "remove": Cmd(filter_remove, "удалить", ("numbers",)),
+                "move": Cmd(filter_move, "порядок: move 3 0", ("numbers", "destination")),
+            }),
+            "nat": Menu("проброс портов", {
+                "print": pr(nat_print),
+                "add": Cmd(nat_add, "add chain=dstnat action=dst-nat protocol=tcp dst-port=8080 "
+                                    "to-addresses=192.168.88.20 to-ports=80", NAT_FIELDS,
+                           {"chain": ["dstnat"], "action": ["dst-nat"], "protocol": ["tcp", "udp", "tcp,udp"],
+                            "disabled": YESNO}),
+                "set": Cmd(nat_set, "изменить: set 0 параметр=значение", ("numbers",) + NAT_FIELDS),
+                "enable": Cmd(_nat_toggle(True), "включить", ("numbers",)),
+                "disable": Cmd(_nat_toggle(False), "выключить", ("numbers",)),
+                "remove": Cmd(nat_remove, "удалить", ("numbers",)),
+            }),
         }),
     }),
     "wan": Menu("WAN", {
-        "print": Cmd(wan_print, PRINT),
+        "print": Cmd(wan_print, P),
         "set": Cmd(wan_set, "set mode=dhcp | mode=static address=... gateway=... dns=...",
-                   ("mode", "address", "gateway", "dns", "interface")),
-        "renew": Cmd(wan_renew, "обновить аренду DHCP"),
+                   ("mode", "address", "gateway", "dns", "interface"),
+                   {"mode": ["dhcp", "static", "none"], **IFACE}),
+        "renew": Cmd(dhcp_client_renew, "обновить аренду DHCP"),
     }),
-    "lan": Menu("LAN", {"print": Cmd(lan_print, PRINT)}),
-    "vpn": Menu("VPN", {"print": Cmd(vpn_print, PRINT)}),
+    "lan": Menu("LAN", {"print": Cmd(lan_print, P)}),
+    "vpn": Menu("VPN", {"print": Cmd(vpn_print, P)}),
     "system": Menu("система", {
-        "resource": Menu("ресурсы", {"print": Cmd(resource_print, PRINT)}),
-        "identity": Menu("имя роутера", {"print": Cmd(identity_print, PRINT),
+        "resource": Menu("ресурсы", {"print": Cmd(resource_print, P)}),
+        "identity": Menu("имя роутера", {"print": Cmd(identity_print, P),
                                           "set": Cmd(identity_set, "set name=...", ("name",))}),
+        "clock": Menu("время", {"print": Cmd(clock_print, P)}),
+        "routerboard": Menu("устройство", {"print": Cmd(routerboard_print, P)}),
+        "package": Menu("версия", {"print": pr(package_print)}),
         "shell": Cmd(system_shell, "командная строка Linux (bash); назад — exit или Ctrl-D"),
         "reboot": Cmd(system_reboot, "перезапустить сервис роутера"),
     }),
-    "ping": Cmd(ping, "ping 8.8.8.8 count=4 interface=wg0", ("count", "interface")),
-    "traceroute": Cmd(traceroute, "traceroute 8.8.8.8", ("max-hops", "interface")),
+    "user": Menu("пользователи", {
+        "print": pr(user_print),
+        "add": Cmd(user_add, "add name=ivan group=full|read (пароль спросит)", ("name", "group", "password"),
+                   {"group": ["full", "read"]}),
+        "set": Cmd(user_set, "set 1 group=read | password=...", ("numbers", "group", "password"),
+                   {"group": ["full", "read"]}),
+        "remove": Cmd(user_remove, "удалить: remove 1", ("numbers",)),
+    }),
+    "password": Cmd(password, "сменить свой пароль", ("old-password", "new-password", "confirm-new-password")),
+    "log": Menu("журнал действий", {"print": Cmd(log_print, P, ("count",))}),
+    "tool": Menu("инструменты", {
+        "ping": Cmd(ping, "ping 8.8.8.8 count=4 interface=wg0", ("address", "count", "interface"), IFACE),
+        "traceroute": Cmd(traceroute, "traceroute 8.8.8.8", ("address", "max-hops", "interface"), IFACE),
+        "ip-scan": Cmd(ip_scan, "устройства в сети: ip-scan address-range=192.168.88.0/24",
+                       ("address-range", "interface"), IFACE),
+        "dns-lookup": Cmd(dns_lookup, "dns-lookup name=example.com", ("name",)),
+    }),
+    "ping": Cmd(ping, "ping 8.8.8.8 count=4 interface=wg0", ("address", "count", "interface"), IFACE),
+    "traceroute": Cmd(traceroute, "traceroute 8.8.8.8", ("address", "max-hops", "interface"), IFACE),
     "export": Cmd(export, "вся конфигурация (router.yaml)"),
     "quit": Cmd(quit_cmd, "выйти"),
 })
+GLOBAL = ("ping", "traceroute", "export", "quit", "password")      # работают из любого меню
 
 
 def node_at(path: list[str]) -> Menu:
@@ -513,6 +1031,21 @@ def node_at(path: list[str]) -> Menu:
 
 def path_str(path: list[str]) -> str:
     return "/" + " ".join(path) if path else ""
+
+
+def _child(node: Menu, word: str, line: str):
+    """Точное имя или однозначное сокращение (как в RouterOS); глобальные команды — из любого меню."""
+    if word in node.children:
+        return word, node.children[word]
+    matches = [k for k in node.children if k.startswith(word)]
+    if len(matches) > 1:
+        raise CliError(f"ambiguous value of {word}, more than one possible value: {', '.join(sorted(matches))}")
+    if matches:
+        return matches[0], node.children[matches[0]]
+    glob = [g for g in GLOBAL if g.startswith(word)]
+    if len(glob) == 1:
+        return glob[0], ROOT.children[glob[0]]
+    raise CliError(f"bad command name {word} (line 1 column {line.find(word) + 1})")
 
 
 # --- разбор строки ----------------------------------------------------------------------------------------------------
@@ -534,17 +1067,12 @@ def parse(line: str, cwd: list[str]) -> tuple[list[str], Cmd | None, list[str]]:
             path = path[:-1]
             rest.pop(0)
             continue
-        node = node_at(path)
-        child = node.children.get(w)
-        if child is None and isinstance(ROOT.children.get(w), Cmd):
-            child = ROOT.children[w]          # quit, ping, traceroute, export — из любого меню
+        name, child = _child(node_at(path), w, line)
         if isinstance(child, Menu):
-            path.append(w)
+            path.append(name)
             rest.pop(0)
-        elif isinstance(child, Cmd):
-            return path, child, rest[1:]
         else:
-            raise CliError(f"bad command name {w} (line 1 column {line.find(w) + 1})")
+            return path, child, rest[1:]
     return path, None, []
 
 
@@ -553,31 +1081,42 @@ def execute(ctx: Ctx, line: str, cwd: list[str]) -> list[str]:
     line = line.strip()
     if not line:
         return cwd
-    if line in ("?", "help"):
-        show_help(ctx, cwd)
+    if line in ("?", "help") or line.endswith(" ?"):
+        path, cmd, _ = parse(line[:-1].strip(), cwd) if line.endswith(" ?") else (cwd, None, [])
+        show_help(ctx, path, cmd)
         return cwd
     path, cmd, args = parse(line, cwd)
     if cmd is None:
         return path
     pos, named = split_args(args)
+    named = expand_params(cmd, named)
+    ctx.detail = "detail" in pos
+    pos = [p for p in pos if p != "detail"]
     try:
         cmd.fn(ctx, pos, named)
     except ApiError as e:
         raise CliError(f"failure: {e}") from e
+    finally:
+        ctx.detail = False
     return cwd
 
 
-def show_help(ctx: Ctx, cwd: list[str]) -> None:
+def show_help(ctx: Ctx, cwd: list[str], cmd: Cmd | None = None) -> None:
+    if cmd:
+        ctx.out(cmd.help)
+        if cmd.params:
+            ctx.out("  параметры: " + " ".join(p + "=" for p in cmd.params if p not in ("numbers", "detail")))
+        return
     node = node_at(cwd)
     ctx.out(f"{path_str(cwd) or '/'} — {node.help}")
     for name, child in sorted(node.children.items(), key=lambda kv: (isinstance(kv[1], Cmd), kv[0])):
         mark = "/" if isinstance(child, Menu) else " "
-        ctx.out(f"  {mark}{name:<14} {child.help}")
-    ctx.out("  .. — на уровень вверх, / — в корень, Tab — подсказки, /system shell — bash, quit — выход")
+        ctx.out(f"  {mark}{name:<16} {child.help}")
+    ctx.out("  .. — вверх, / — в корень, Tab — подсказки, сокращения: /ip addr pr, «команда ?» — помощь по команде")
 
 
 # --- автодополнение ----------------------------------------------------------------------------------------------------
-def complete(text: str, cwd: list[str]) -> list[str]:
+def complete(text: str, cwd: list[str], ctx: Ctx | None = None) -> list[str]:
     """Варианты для последнего слова строки text (как Tab в RouterOS)."""
     parts = text.split(" ")
     last, head = parts[-1], " ".join(parts[:-1])
@@ -595,7 +1134,15 @@ def complete(text: str, cwd: list[str]) -> list[str]:
         return []
     if cmd is None:
         node = node_at(path)
-        return [n for n in sorted(node.children) if n.startswith(last)] + (
-            [".."] if path and "..".startswith(last) and last else [])
+        return [n for n in sorted(node.children) if n.startswith(last)]
+    if "=" in last:                                            # значение параметра: interface=e<Tab>
+        key, val = last.split("=", 1)
+        key = next((p for p in cmd.params if p == key), None) or next(
+            (p for p in cmd.params if p.startswith(key)), key)
+        options = cmd.values.get(key, [])
+        if callable(options):
+            options = options(ctx) if ctx else []
+        return [f"{key}={o}" for o in options if o.startswith(val)]
     used = {a.split("=", 1)[0] for a in args if "=" in a}
-    return [p + "=" for p in cmd.params if p not in used and p.startswith(last)]
+    return [p + ("" if p == "detail" else "=") for p in cmd.params
+            if p not in used and p != "numbers" and p.startswith(last)]
