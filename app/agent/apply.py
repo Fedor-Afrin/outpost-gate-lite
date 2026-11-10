@@ -7,8 +7,8 @@ router.yaml — единый источник правды (аналог /export
   2. WAN (адрес/шлюз или запуск DHCP-клиента)
   3. LAN (мост br-lan, dnsmasq, NAT и фаервол)
   4. VPN (WireGuard / AmneziaWG / L2TP: туннель, маршруты, kill switch)
-  5. адреса из Advanced → IP Addresses
-  6. маршруты из Advanced → IP Routes  (после адресов: шлюз должен быть доступен)
+  5. дополнительные адреса (CLI: /ip address)
+  6. статические маршруты (CLI: /ip route)  — после адресов: шлюз должен быть доступен
 Дальше: Status, Safe Mode.
 """
 from app.services import addresses, lan, routes, sysctl, vpn, wan

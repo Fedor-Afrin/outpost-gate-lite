@@ -19,7 +19,7 @@ from app.cli.api import Api, ApiError
 BANNER = """
   OutpostGate — VPN-шлюз удалённого сотрудника
   Команды как в MikroTik RouterOS:  /ip address print · /ip route print · /ping 8.8.8.8
-  ? — помощь · Tab — подсказки · /system shell — bash · quit — выход
+  ? — помощь · Tab — подсказки · сокращения: /ip addr pr · /system shell — bash · quit — выход
 """
 
 
@@ -61,7 +61,7 @@ def interactive(ctx: commands.Ctx, identity: str) -> None:
             def get_completions(self, document, complete_event):
                 text = document.text_before_cursor
                 last = text.split(" ")[-1]
-                for word in commands.complete(text, cwd):
+                for word in commands.complete(text, cwd, ctx):
                     yield Completion(word, start_position=-len(last))
 
         session = PromptSession(history=InMemoryHistory(), completer=RouterCompleter(), complete_while_typing=False)
