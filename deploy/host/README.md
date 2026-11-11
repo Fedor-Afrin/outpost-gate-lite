@@ -7,8 +7,8 @@ Docker по умолчанию ставит политику `FORWARD` в `DROP`
 sudo cp daemon.json.example /etc/docker/daemon.json
 sudo systemctl restart docker
 
-sudo mkdir -p /etc/outpost-gate /var/lib/outpost-gate
-sudo cp ../../config/router.yaml /etc/outpost-gate/
+sudo mkdir -p /etc/outpost-gate-lite /var/lib/outpost-gate-lite
+sudo cp ../../config/router.yaml /etc/outpost-gate-lite/
 
 docker compose up -d --build
 ```
@@ -16,16 +16,19 @@ docker compose up -d --build
 Также отключите/ограничьте netplan и NetworkManager на управляемых интерфейсах,
 чтобы они не перетирали настройки роутера.
 
-## Переход со старого названия (ubuntu-router -> outpost-gate)
+## Переход со старых названий (ubuntu-router или outpost-gate -> outpost-gate-lite)
 
 Если роутер уже работал под старым названием, перенесите настройки один раз:
 ```bash
 docker compose -p ubuntu-router down 2>/dev/null || true
-sudo mv /etc/ubuntu-router /etc/outpost-gate
-sudo mv /var/lib/ubuntu-router /var/lib/outpost-gate
+# было outpost-gate:
+sudo mv /etc/outpost-gate /etc/outpost-gate-lite
+sudo mv /var/lib/outpost-gate /var/lib/outpost-gate-lite
+# или было ubuntu-router:
+# sudo mv /etc/ubuntu-router /etc/outpost-gate-lite && sudo mv /var/lib/ubuntu-router /var/lib/outpost-gate-lite
 docker compose up -d --build
 ```
-Старая таблица фаервола `inet ubuntu_router` удаляется автоматически.
+Старые таблицы фаервола (`inet ubuntu_router`, `inet outpost_gate`) удаляются автоматически.
 
 ## Командная строка (CLI)
 `ssh -p 2222 admin@<адрес роутера>` — оболочка в стиле MikroTik. Порт 22 остаётся SSH самого сервера.

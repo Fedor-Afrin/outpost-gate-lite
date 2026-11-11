@@ -1,4 +1,4 @@
-# OutpostGate
+# OutpostGate Lite
 
 **VPN-шлюз для удалённого сотрудника** на любом Linux с Docker: один WAN в интернет, LAN-порты для
 телефона и компьютера, туннель в корпоративную сеть (WireGuard / AmneziaWG / L2TP).
@@ -23,8 +23,14 @@
 docker compose up --build
 ```
 - Веб-интерфейс: http://localhost:8000 — пользователь `admin`, пароль пустой (только из локальной сети)
-- CLI в стиле MikroTik: `ssh -p 2222 admin@localhost` или `docker exec -it outpost-gate-dev outpost`
+- CLI в стиле MikroTik: `ssh -p 2222 admin@localhost` или `docker exec -it outpost-gate-lite-dev outpost`
 - Swagger: http://localhost:8000/docs
+
+## Языки интерфейса
+Русский, English, עברית — переключатель внизу левого меню и на странице входа, без перезагрузки.
+Выбор запоминается в браузере; для иврита страница переходит в режим справа налево.
+Словарь — `web/js/i18n-dict.js` (ключ — русская фраза, значение — `[English, иврит]`);
+`tests/test_i18n.py` проверяет, что каждая фраза `index.html` в нём есть.
 
 ## CLI
 Синтаксис MikroTik RouterOS, включая сокращения (`/ip addr pr`), `print detail`, номера строк из `print`.

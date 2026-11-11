@@ -5,22 +5,22 @@ GNS3 сам создаёт интерфейсы eth0..ethN по числу ад�
 
 1. Собрать образ:
    ```bash
-   docker build -t outpost-gate:gns3 .
+   docker build -t outpost-gate-lite:gns3 .
    ```
 2. GNS3 → Edit → Preferences → Docker containers → New
-   - Image: `outpost-gate:gns3`
+   - Image: `outpost-gate-lite:gns3`
    - Adapters: 2 (eth0 = WAN, eth1 = LAN) или больше
    - Environment: `ROUTER_MODE=gns3`
    - Console type: telnet; HTTP-порт для веб-интерфейса: 8000
 3. Перетащить узел на схему, соединить eth0 с NAT/облаком, eth1 — с клиентами.
 
 ## Сохранение конфига
-Изменения из веб-интерфейса записываются в `/etc/outpost-gate/router.yaml`.
+Изменения из веб-интерфейса записываются в `/etc/outpost-gate-lite/router.yaml`.
 Чтобы они переживали перезапуск узла, в настройках шаблона GNS3 укажите
 **Persistent directories**:
 ```
-/etc/outpost-gate
-/var/lib/outpost-gate
+/etc/outpost-gate-lite
+/var/lib/outpost-gate-lite
 ```
 
 ## Командная строка (CLI в стиле MikroTik)

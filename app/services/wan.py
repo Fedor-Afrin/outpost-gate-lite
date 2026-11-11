@@ -27,7 +27,7 @@ from app.models.wan import WanConfig, WanStatus
 from app.services import netlink
 
 WAN_METRIC = 1
-APP_HOME = Path(__file__).resolve().parents[2]          # /opt/outpost-gate
+APP_HOME = Path(__file__).resolve().parents[2]          # /opt/outpost-gate-lite
 HOOK = APP_HOME / "app" / "scripts" / "udhcpc-hook.sh"
 # Эти интерфейсы не бывают WAN: loopback, мосты, туннели, служебные Docker
 NOT_WAN = ("lo", "br-", "wg", "awg", "docker", "veth", "ppp", "l2tp", "tun", "tap")

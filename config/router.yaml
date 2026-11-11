@@ -2,7 +2,7 @@
 # Роли интерфейсов отделены от имён: в GNS3 это eth0/eth1, на железе enp1s0 и т.п.
 
 system:
-  identity: outpost-gate
+  identity: outpost-gate-lite
 
 interface-lists:
   WAN: [eth0]

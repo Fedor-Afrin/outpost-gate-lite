@@ -9,7 +9,7 @@ aside h2 { font-size: 16px; margin: 0 0 16px; }
 nav a { display: block; color: #cfd8e3; text-decoration: none; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
 nav a:hover { background: #34475a; }
 nav a.active { background: #3d5166; color: #fff; }
-nav a.sub { padding-left: 22px; }
+nav a.sub { padding-inline-start: 22px; }
 nav a.disabled { opacity: .45; pointer-events: none; }
 nav .group { color: #8fa3b8; font-size: 12px; text-transform: uppercase; margin: 10px 0 2px 8px; }
 #sysinfo { margin-top: auto; font-size: 12px; color: #8fa3b8; line-height: 1.5; }
@@ -20,14 +20,14 @@ main { flex: 1; padding: 24px; }
 h1 { font-size: 20px; margin: 0 0 16px; }
 
 table { width: 100%; border-collapse: collapse; background: #fff; }
-th, td { padding: 8px 10px; border-bottom: 1px solid #e3e6ea; text-align: left; font-size: 14px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid #e3e6ea; text-align: start; font-size: 14px; }
 th { background: #eef1f4; }
 .flag-r { color: #1a7f37; font-weight: bold; }
 .flag-x { color: #b42318; font-weight: bold; }
 td.flags { font-weight: bold; color: #6b4f00; font-family: monospace; }
 tr.row-disabled td { color: #9aa3ad; }
 tr.row-dynamic td { color: #3b5b8c; }
-td.actions { white-space: nowrap; text-align: right; }
+td.actions { white-space: nowrap; text-align: end; }
 
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .toolbar input, .toolbar select { padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
@@ -47,7 +47,7 @@ tr.row-inactive td { color: #b42318; }
 .status-grid div { display: flex; gap: 12px; font-size: 14px; }
 .status-grid .label { width: 110px; color: #6b7480; flex-shrink: 0; }
 .form label.row { display: flex; align-items: center; gap: 12px; margin: 8px 0; font-size: 14px; }
-.form label.row > input, .form label.row > select { width: 240px; margin-left: auto; padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
+.form label.row > input, .form label.row > select { width: 240px; margin-inline-start: auto; padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
 .form label.row { max-width: 460px; }
 .modes { border: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .hint { font-size: 12px; color: #6b7480; }
@@ -59,7 +59,7 @@ table.compact { margin-top: 12px; }
 table.compact th, table.compact td { padding: 6px 10px; }
 .form label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 14px; }
 .row-block { margin: 12px 0; font-size: 14px; }
-.port-list { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-left: 24px; }
+.port-list { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-inline-start: 24px; }
 .badge { font-size: 11px; font-weight: bold; padding: 2px 6px; border-radius: 3px; }
 .badge.wan { background: #fdecc8; color: #8a5300; }
 .badge.lan { background: #dcefe0; color: #1a7f37; }
@@ -81,7 +81,7 @@ textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; b
 .act { font-weight: 600; font-size: 12px; }
 .act.accept { color: #1a7f37; }
 .act.drop { color: #b42318; }
-.form.oci { max-width: 860px; border-left: 3px solid #3d5166; }
+.form.oci { max-width: 860px; border-inline-start: 3px solid #3d5166; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
 .grid2 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #3d5166; }
 .grid2 input, .grid2 select { padding: 6px 8px; border: 1px solid #c8ced6; border-radius: 4px; font-size: 14px; }
@@ -89,7 +89,7 @@ textarea { width: 100%; font-family: monospace; font-size: 13px; padding: 8px; b
 .form label.wide-row { max-width: none; }
 .form label.wide-row > input { width: 100%; max-width: 560px; }
 .system-rules { max-width: 860px; margin-top: 16px; background: #f8f9fa; }
-.system-rules ul { margin: 0; padding-left: 20px; font-size: 13px; color: #3d5166; line-height: 1.7; }
+.system-rules ul { margin: 0; padding-inline-start: 20px; font-size: 13px; color: #3d5166; line-height: 1.7; }
 pre.code { background: #1e2733; color: #d8e1ea; padding: 16px; border-radius: 6px; font-size: 12.5px;
            overflow: auto; max-width: 1000px; line-height: 1.45; }
 button:disabled { opacity: .4; cursor: default; }
@@ -150,9 +150,25 @@ a.button { padding: 5px 10px; border: 1px solid #c8ced6; border-radius: 4px; bac
 .status-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; max-width: 1100px; margin-bottom: 16px; }
 .scard { margin: 0; max-width: none; }
 .scard h2 { display: flex; align-items: center; gap: 8px; }
-.scard .more { margin-left: auto; font-size: 12px; font-weight: normal; color: #3d5166; text-decoration: none; }
+.scard .more { margin-inline-start: auto; font-size: 12px; font-weight: normal; color: #3d5166; text-decoration: none; }
 .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 3px 0; border-bottom: 1px dashed #eef1f4; }
 .kv span { color: #6b7480; }
-.kv b { font-weight: 500; text-align: right; word-break: break-word; }
+.kv b { font-weight: 500; text-align: end; word-break: break-word; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #c8ced6; display: inline-block; }
 .dot.ok { background: #1a7f37; } .dot.bad { background: #b42318; } .dot.off { background: #c8ced6; }
+
+/* язык интерфейса */
+.lang-switch { display: flex; gap: 4px; margin-top: 12px; }
+.lang-switch button { flex: 1; padding: 4px 0; font-size: 12px; background: transparent; color: inherit;
+  border: 1px solid rgba(127, 140, 155, .55); border-radius: 4px; cursor: pointer; opacity: .75; }
+.lang-switch button.active { opacity: 1; font-weight: 600; background: rgba(127, 140, 155, .25); }
+.login-card .lang-switch { margin: 0 0 8px; justify-content: flex-end; }
+.login-card .lang-switch button { flex: 0 0 40px; color: #3d5166; }
+/* иврит: страница справа налево, но адреса, ключи и код — всегда слева направо */
+[dir=rtl] pre, [dir=rtl] code { direction: ltr; unicode-bidi: isolate; }
+[dir=rtl] input, [dir=rtl] textarea { unicode-bidi: plaintext; }
+/* числа с единицами (976.6 KB, 48 °C) и адреса не переворачиваются в ивритском тексте */
+[dir=rtl] td, [dir=rtl] th, [dir=rtl] .kv b, [dir=rtl] .tile b, [dir=rtl] .summary, [dir=rtl] .system-rules li { unicode-bidi: plaintext; }
+[dir=rtl] td, [dir=rtl] th, [dir=rtl] .summary, [dir=rtl] .system-rules li { text-align: right; }
+[dir=rtl] td.actions { text-align: left; }
+[dir=rtl] .kv b { text-align: left; }

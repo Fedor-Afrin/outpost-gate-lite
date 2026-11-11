@@ -17,7 +17,7 @@ from app.cli import commands
 from app.cli.api import Api, ApiError
 
 BANNER = """
-  OutpostGate — VPN-шлюз удалённого сотрудника
+  OutpostGate Lite — VPN-шлюз удалённого сотрудника
   Команды как в MikroTik RouterOS:  /ip address print · /ip route print · /ping 8.8.8.8
   ? — помощь · Tab — подсказки · сокращения: /ip addr pr · /system shell — bash · quit — выход
 """
@@ -25,18 +25,18 @@ BANNER = """
 
 def run_bash() -> None:
     """/system shell: настоящий bash; exit или Ctrl-D — назад в оболочку роутера."""
-    print("Командная строка Linux. Назад в OutpostGate: exit или Ctrl-D\n")
-    env = {**os.environ, "PS1": r"[shell@outpost-gate \W]# "}
+    print("Командная строка Linux. Назад в OutpostGate Lite: exit или Ctrl-D\n")
+    env = {**os.environ, "PS1": r"[shell@outpost-gate-lite \W]# "}
     shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
     subprocess.call([shell, "--norc"] if shell.endswith("bash") else [shell], env=env)
-    print("\nНазад в OutpostGate.")
+    print("\nНазад в OutpostGate Lite.")
 
 
 def _whoami(api: Api) -> tuple[str, str, str]:
     me = api.get("/api/auth/me")
     if not me.get("logged_in"):
         raise ApiError("нет входа: токен не принят")
-    return me["name"], me["role"], me.get("identity") or "outpost-gate"
+    return me["name"], me["role"], me.get("identity") or "outpost-gate-lite"
 
 
 def run_one(ctx: commands.Ctx, line: str) -> int:
@@ -107,7 +107,7 @@ def _take_terminal() -> None:
 
 def main() -> None:
     _take_terminal()
-    parser = argparse.ArgumentParser(prog="outpost", description="CLI OutpostGate в стиле MikroTik")
+    parser = argparse.ArgumentParser(prog="outpost", description="CLI OutpostGate Lite в стиле MikroTik")
     parser.add_argument("-c", "--command", help="выполнить одну команду и выйти")
     args = parser.parse_args()
 
@@ -115,7 +115,7 @@ def main() -> None:
     try:
         user, role, identity = _whoami(api)
     except ApiError as e:
-        sys.exit(f"OutpostGate: {e}")
+        sys.exit(f"OutpostGate Lite: {e}")
     ctx = commands.Ctx(api=api, user=user, role=os.getenv("OG_ROLE") or role, shell=run_bash)
     if args.command:
         sys.exit(run_one(ctx, args.command))

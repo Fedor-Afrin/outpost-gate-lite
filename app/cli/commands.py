@@ -740,12 +740,12 @@ def clock_print(ctx, pos, named):
 def routerboard_print(ctx, pos, named):
     r = ctx.api.get("/api/system/resource")
     kv(ctx, [("routerboard", "no"), ("model", r.get("model")), ("architecture", r["arch"]),
-             ("firmware", f'OutpostGate {r["version"]}'), ("kernel", r["kernel"])])
+             ("firmware", f'OutpostGate Lite {r["version"]}'), ("kernel", r["kernel"])])
 
 
 def package_print(ctx, pos, named):
     r = ctx.api.get("/api/system/resource")
-    table(ctx, ["name", "version"], [["outpost-gate", r["version"]]])
+    table(ctx, ["name", "version"], [["outpost-gate-lite", r["version"]]])
 
 
 def system_reboot(ctx, pos, named):
@@ -909,7 +909,7 @@ def pr(fn):
     return Cmd(fn, P, ("detail",))
 
 
-ROOT = Menu("OutpostGate", {
+ROOT = Menu("OutpostGate Lite", {
     "interface": Menu("интерфейсы", {
         "print": pr(interface_print),
         "monitor-traffic": Cmd(monitor_traffic, "скорость интерфейса: monitor-traffic eth0 (Ctrl-C — стоп)",

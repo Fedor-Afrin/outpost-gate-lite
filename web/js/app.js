@@ -148,7 +148,7 @@ async function loadWan() {
   $("#ws-gw").textContent = w.gateway ?? "—";
   $("#ws-dns").textContent = w.dns.length ? w.dns.join(", ") : "—";
   $("#ws-mac").textContent = w.mac ?? "—";
-  $("#ws-lease").textContent = w.lease_expires ? new Date(w.lease_expires * 1000).toLocaleString() : "—";
+  $("#ws-lease").textContent = w.lease_expires ? new Date(w.lease_expires * 1000).toLocaleString(I18N.locale()) : "—";
   $("#wan-renew").hidden = !w.dhcp_running;
   if (!wanFormLoaded) { fillWanForm(w); wanFormLoaded = true; }
 }
@@ -225,7 +225,7 @@ async function loadLan() {
   $("#lan-leases").innerHTML = l.leases.map((d) => `
     <tr><td>${esc(d.name ?? d.hostname ?? "—")}</td><td>${esc(d.ip)}</td><td>${esc(d.mac)}</td>
         <td>${esc(d.vendor ?? "—")}</td>
-        <td>${d.expires ? new Date(d.expires * 1000).toLocaleString() : "бессрочно"}</td>
+        <td>${d.expires ? new Date(d.expires * 1000).toLocaleString(I18N.locale()) : "бессрочно"}</td>
         <td class="actions">${d.static ? '<span class="badge lan">закреплён</span>'
           : `<button type="button" data-pin="${esc(d.mac)}" data-ip="${esc(d.ip)}" data-name="${esc(d.hostname ?? "")}">Закрепить</button>`}</td></tr>`).join("")
     || '<tr><td colspan="6" class="hint">пока никого</td></tr>';
@@ -340,7 +340,7 @@ async function loadVpn() {
 
 function ago(ts) {
   const s = Math.round(Date.now() / 1000 - ts);
-  return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString();
+  return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString(I18N.locale());
 }
 
 // ---------------------------------------------------------------- VPN → WireGuard / AmneziaWG
@@ -876,7 +876,7 @@ async function loadSystemPage() {
     const row = (k, v) => `<div><span class="label">${k}</span><span>${esc(v ?? "—")}</span></div>`;
     $("#sys-info").innerHTML = row("Устройство", r.model) + row("Архитектура", `${r.arch}, ${r.cpu_count} CPU`)
       + row("Ядро", r.kernel) + row("Версия", r.version) + row("Режим", r.mode) + row("Hostname", r.hostname)
-      + row("Нагрузка", r.load.join(" / ")) + row("Время", new Date(r.time).toLocaleString());
+      + row("Нагрузка", r.load.join(" / ")) + row("Время", new Date(r.time).toLocaleString(I18N.locale()));
     const f = $("#identity-form");
     if (document.activeElement !== f.identity) f.identity.value = r.identity;
   } else if (sysTab === "users") {
@@ -893,14 +893,14 @@ async function loadSystemPage() {
   } else if (sysTab === "backup") {
     const snaps = await api("GET", "/api/system/snapshots");
     $("#snapshots").innerHTML = snaps.map((x) => `
-      <tr><td>${new Date(x.time).toLocaleString()}</td><td>${fmt(x.size)}</td>
+      <tr><td>${new Date(x.time).toLocaleString(I18N.locale())}</td><td>${fmt(x.size)}</td>
         <td class="actions"><a href="/api/system/snapshots/${encodeURIComponent(x.name)}">скачать</a>
           <button type="button" data-snap="${esc(x.name)}">Восстановить</button></td></tr>`).join("")
       || '<tr><td colspan="3" class="hint">снимков пока нет — они появятся после первого изменения</td></tr>';
   } else if (sysTab === "audit") {
     const log = await api("GET", "/api/system/audit?limit=300");
     $("#audit").innerHTML = log.map((x) => `
-      <tr class="${x.status >= 400 ? "row-inactive" : ""}"><td>${new Date(x.time).toLocaleString()}</td><td>${esc(x.user)}</td>
+      <tr class="${x.status >= 400 ? "row-inactive" : ""}"><td>${new Date(x.time).toLocaleString(I18N.locale())}</td><td>${esc(x.user)}</td>
         <td>${esc(x.method)}</td><td class="mono">${esc(x.path)}</td><td>${x.status}</td><td>${esc(x.ip)}</td></tr>`).join("")
       || '<tr><td colspan="6" class="hint">записей нет</td></tr>';
   }
@@ -916,7 +916,7 @@ $("#identity-form").addEventListener("submit", async (ev) => {
 });
 
 $("#restart-btn").addEventListener("click", async () => {
-  if (!confirm("Перезапустить сервис роутера? Связь пропадёт на несколько секунд.")) return;
+  if (!confirm(I18N.t("Перезапустить сервис роутера? Связь пропадёт на несколько секунд."))) return;
   const r = await api("POST", "/api/system/restart");
   $("#restart-msg").textContent = r.message;
   setTimeout(() => location.reload(), 8000);
@@ -926,7 +926,7 @@ $("#users").addEventListener("change", async (ev) => {
   const sel = ev.target.closest("select[data-role]");
   if (!sel) return;
   try { await api("PUT", `/api/system/users/${sel.dataset.role}`, { role: sel.value }); }
-  catch (e) { alert(e.message); }
+  catch (e) { alert(I18N.tr(e.message)); }
   loadSystemPage();
 });
 
@@ -936,13 +936,13 @@ $("#users").addEventListener("click", async (ev) => {
   try {
     if (b.dataset.own) { openPwChange(); return; }
     if (b.dataset.reset) {
-      const pw = prompt(`Временный пароль для ${b.dataset.reset} (не короче 8 символов). Пользователь сменит его при входе:`);
+      const pw = prompt(I18N.t("Временный пароль для {user} (не короче 8 символов). Пользователь сменит его при входе:", { user: b.dataset.reset }));
       if (pw) await api("PUT", `/api/system/users/${b.dataset.reset}`, { password: pw });
     }
-    if (b.dataset.udel && confirm(`Удалить пользователя ${b.dataset.udel}?`)) {
+    if (b.dataset.udel && confirm(I18N.t("Удалить пользователя {name}?", { name: b.dataset.udel }))) {
       await api("DELETE", `/api/system/users/${b.dataset.udel}`);
     }
-  } catch (e) { alert(e.message); }
+  } catch (e) { alert(I18N.tr(e.message)); }
   loadSystemPage();
 });
 
@@ -962,7 +962,7 @@ $("#restore-btn").addEventListener("click", async () => {
   $("#restore-msg").textContent = "";
   $("#restore-error").textContent = "";
   if (!file) { $("#restore-error").textContent = "выберите файл .yaml"; return; }
-  if (!confirm("Заменить текущую конфигурацию роутера содержимым файла? Текущая версия сохранится в снимках.")) return;
+  if (!confirm(I18N.t("Заменить текущую конфигурацию роутера содержимым файла? Текущая версия сохранится в снимках."))) return;
   try {
     await api("POST", "/api/system/restore", { text: await file.text(), filename: file.name });
     $("#restore-msg").textContent = "Восстановлено и применено";
@@ -972,7 +972,7 @@ $("#restore-btn").addEventListener("click", async () => {
 
 $("#snapshots").addEventListener("click", async (ev) => {
   const b = ev.target.closest("button[data-snap]");
-  if (!b || !confirm("Вернуть конфигурацию из этого снимка? Текущая версия тоже сохранится в снимках.")) return;
+  if (!b || !confirm(I18N.t("Вернуть конфигурацию из этого снимка? Текущая версия тоже сохранится в снимках."))) return;
   try {
     await api("POST", `/api/system/snapshots/${encodeURIComponent(b.dataset.snap)}/restore`);
     $("#restore-msg").textContent = "Снимок восстановлен и применён";
@@ -1028,7 +1028,7 @@ async function checkAuth() {
 
 function setIdentity(name) {
   $("#identity").textContent = name;
-  document.title = `${name} — OutpostGate`;
+  document.title = `${name} — OutpostGate Lite`;
 }
 
 function startApp() {
@@ -1109,26 +1109,26 @@ async function pollSafeMode() {
   const ev = st.last_event;
   if (ev && ev.type === "rollback" && ev.time !== safeEventShown) {
     safeEventShown = ev.time;
-    $("#safe-event").textContent = `Safe Mode: конфигурация откачена (${ev.reason}) — ${new Date(ev.time).toLocaleString()}`;
+    $("#safe-event").textContent = `Safe Mode: конфигурация откачена (${ev.reason}) — ${new Date(ev.time).toLocaleString(I18N.locale())}`;
     $("#safe-event").hidden = false;
   }
 }
 
 async function safeStart() {
   const timeout = Number($("#safe-timeout").value || 60);
-  try { await api("POST", "/api/system/safe-mode", { timeout }); } catch (e) { alert(e.message); }
+  try { await api("POST", "/api/system/safe-mode", { timeout }); } catch (e) { alert(I18N.tr(e.message)); }
   pollSafeMode();
 }
 
 $("#safe-btn").addEventListener("click", async () => {
-  if (safeActive) { try { await api("POST", "/api/system/safe-mode/commit"); } catch (e) { alert(e.message); } }
+  if (safeActive) { try { await api("POST", "/api/system/safe-mode/commit"); } catch (e) { alert(I18N.tr(e.message)); } }
   else await safeStart();
   pollSafeMode();
 });
 $("#safe-start2").addEventListener("click", safeStart);
 $("#safe-commit").addEventListener("click", async () => { await api("POST", "/api/system/safe-mode/commit"); pollSafeMode(); });
 $("#safe-rollback").addEventListener("click", async () => {
-  if (!confirm("Вернуть конфигурацию к состоянию до включения Safe Mode?")) return;
+  if (!confirm(I18N.t("Вернуть конфигурацию к состоянию до включения Safe Mode?"))) return;
   await api("POST", "/api/system/safe-mode/rollback");
   pollSafeMode();
 });

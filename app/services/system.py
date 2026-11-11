@@ -104,7 +104,7 @@ def temperature() -> float | None:
 
 
 def identity() -> str:
-    return (store.load().get("system") or {}).get("identity") or "outpost-gate"
+    return (store.load().get("system") or {}).get("identity") or "outpost-gate-lite"
 
 
 def set_identity(name: str) -> str:

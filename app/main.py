@@ -1,4 +1,4 @@
-"""Точка входа FastAPI-приложения OutpostGate."""
+"""Точка входа FastAPI-приложения OutpostGate Lite."""
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -36,9 +36,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="OutpostGate",
+    title="OutpostGate Lite",
     version=settings.version,
-    description="OutpostGate — VPN-шлюз для удалённого сотрудника: REST API (идеи RouterOS)",
+    description="OutpostGate Lite — VPN-шлюз для удалённого сотрудника: REST API (идеи RouterOS)",
     lifespan=lifespan,
 )
 
