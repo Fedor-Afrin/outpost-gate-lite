@@ -7,7 +7,7 @@
 // Для текстов вне страницы (confirm / prompt / alert) — I18N.t() и I18N.tr().
 (function () {
   "use strict";
-  const LANGS = { ru: "Русский", en: "English", he: "עברית" };
+  const LANGS = { en: "English", ru: "Русский", he: "עברית" };
   const COL = { en: 0, he: 1 };
   const LOCALE = { ru: "ru-RU", en: "en-GB", he: "he-IL" };
   const SKIP = "script, style, textarea, pre, [data-no-i18n]";
@@ -143,10 +143,7 @@
   // ---------------------------------------------------------------- язык
   function initialLang() {
     try { const s = localStorage.getItem("og_lang"); if (s && LANGS[s]) return s; } catch (_) { /* нет storage */ }
-    const n = (navigator.language || "ru").toLowerCase();
-    if (n.startsWith("ru")) return "ru";
-    if (n.startsWith("he") || n.startsWith("iw")) return "he";
-    return "en";
+    return "en";   // по умолчанию — английский; выбор пользователя запоминается в браузере
   }
 
   function markButtons() {
