@@ -256,7 +256,7 @@ def _setup_wg(kind: str, cfg: WgConfig) -> None:
 # --- L2TP/IPsec ----------------------------------------------------------------------------------
 def swanctl_conf(cfg: L2tpConfig, server_ip: str) -> str:
     """IPsec IKEv1, PSK, транспортный режим только для L2TP (udp/1701) — как у MikroTik и Windows."""
-    return f"""# сгенерировано OutpostGate
+    return f"""# сгенерировано OutpostGate Lite
 connections {{
     l2tp {{
         version = 1
@@ -292,7 +292,7 @@ secrets {{
 
 
 def xl2tpd_conf(server_ip: str, options_file: str) -> str:
-    return f"""; сгенерировано OutpostGate
+    return f"""; сгенерировано OutpostGate Lite
 [global]
 port = 1701
 
@@ -309,7 +309,7 @@ max redials = 1000000
 
 def ppp_options(cfg: L2tpConfig) -> str:
     scripts = APP_HOME / "app" / "scripts"
-    return f"""# сгенерировано OutpostGate
+    return f"""# сгенерировано OutpostGate Lite
 ifname {IFACES['l2tp']}
 name "{cfg.username}"
 password "{cfg.password}"

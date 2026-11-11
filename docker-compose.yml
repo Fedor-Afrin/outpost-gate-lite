@@ -4,12 +4,12 @@
 #   http://localhost:8000      — веб-интерфейс
 #   http://localhost:8000/docs — Swagger
 #   ssh -p 2222 admin@localhost — командная строка в стиле MikroTik
-name: outpost-gate   # имя проекта не зависит от названия папки
+name: outpost-gate-lite   # имя проекта не зависит от названия папки
 services:
   router:
     build: .
-    image: outpost-gate:dev
-    container_name: outpost-gate-dev
+    image: outpost-gate-lite:dev
+    container_name: outpost-gate-lite-dev
     restart: unless-stopped   # «Перезапустить сервис» в System: Docker поднимет контейнер сам
     environment:
       ROUTER_MODE: dev
@@ -26,10 +26,10 @@ services:
       - "8000:8000"
       - "2222:22"        # SSH -> CLI роутера
     volumes:
-      - ./app:/opt/outpost-gate/app       # правки кода без пересборки
-      - ./web:/opt/outpost-gate/web
-      - ./config:/etc/outpost-gate            # папка целиком: нужна для атомарной записи router.yaml
-      - ./data:/var/lib/outpost-gate          # снимки конфига (data/snapshots)
+      - ./app:/opt/outpost-gate-lite/app       # правки кода без пересборки
+      - ./web:/opt/outpost-gate-lite/web
+      - ./config:/etc/outpost-gate-lite            # папка целиком: нужна для атомарной записи router.yaml
+      - ./data:/var/lib/outpost-gate-lite          # снимки конфига (data/snapshots)
     networks:
       wan:
         priority: 1000   # подключается первой -> eth0

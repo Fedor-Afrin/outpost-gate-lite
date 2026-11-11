@@ -7,8 +7,8 @@
 services:
   router:
     build: ../..
-    image: outpost-gate:latest
-    container_name: outpost-gate
+    image: outpost-gate-lite:latest
+    container_name: outpost-gate-lite
     restart: unless-stopped
     network_mode: host          # реальные интерфейсы сервера
     cap_add:
@@ -22,5 +22,5 @@ services:
       API_PORT: "8000"
       CLI_SSH_PORT: "2222"      # SSH -> CLI роутера; порт 22 оставлен SSH самого сервера
     volumes:
-      - /etc/outpost-gate:/etc/outpost-gate
-      - /var/lib/outpost-gate:/var/lib/outpost-gate
+      - /etc/outpost-gate-lite:/etc/outpost-gate-lite
+      - /var/lib/outpost-gate-lite:/var/lib/outpost-gate-lite

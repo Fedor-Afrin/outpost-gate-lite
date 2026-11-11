@@ -2,14 +2,15 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>OutpostGate</title>
-  <link rel="stylesheet" href="css/style.css?v=0.10.0">
+  <title>OutpostGate Lite</title>
+  <link rel="stylesheet" href="css/style.css?v=0.11.0">
 </head>
 <body>
   <!-- вход -->
   <div id="login" class="overlay" hidden>
     <form id="login-form" class="card login-card">
-      <h2>OutpostGate</h2>
+      <div class="lang-switch" data-no-i18n><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="he" title="עברית">עב</button></div>
+      <h2>OutpostGate Lite</h2>
       <p class="hint">Войдите, чтобы управлять роутером.</p>
       <label>Пользователь <input name="name" autocomplete="username" value="admin" required></label>
       <label>Пароль <input name="password" type="password" autocomplete="current-password"></label>
@@ -34,7 +35,7 @@
   </div>
 
   <aside>
-    <h2 id="identity">OutpostGate</h2>
+    <h2 id="identity" data-no-i18n>OutpostGate Lite</h2>
     <button type="button" id="safe-btn" class="safe-btn" title="Safe Mode: откат, если связь с роутером пропадёт">Safe Mode</button>
     <nav>
       <a href="#status" data-page="status">Status</a>
@@ -47,6 +48,7 @@
     </nav>
     <p id="sysinfo"></p>
     <div class="whoami"><span id="whoami"></span> <a href="#" id="logout">Выйти</a></div>
+    <div class="lang-switch" data-no-i18n><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="he" title="עברית">עב</button></div>
   </aside>
 
   <main>
@@ -423,7 +425,7 @@
 
       <!-- итоговый ruleset -->
       <div id="fw-ruleset-panel" hidden>
-        <p class="hint">Так выглядит таблица <code>inet outpost_gate</code>, которую роутер собирает из ваших
+        <p class="hint">Так выглядит таблица <code>inet outpost_gate_lite</code>, которую роутер собирает из ваших
           и системных правил и применяет атомарно командой <code>nft -f</code>.</p>
         <pre id="fw-ruleset" class="code"></pre>
       </div>
@@ -555,6 +557,8 @@
 
   </main>
 
-  <script src="js/app.js?v=0.10.0"></script>
+  <script src="js/i18n-dict.js?v=0.11.0"></script>
+  <script src="js/i18n.js?v=0.11.0"></script>
+  <script src="js/app.js?v=0.11.0"></script>
 </body>
 </html>
