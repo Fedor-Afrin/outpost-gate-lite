@@ -357,7 +357,65 @@ def apply(cfg: LanConfig) -> None:
             setup(cfg)
 
 
+def renumber(ip: str, old_net, new_net, router_ip) -> str | None:
+    """Тот же номер хоста в новой сети: 192.168.88.20 (/24) -> 192.168.1.20. None — не помещается."""
+    try:
+        offset = int(ipaddress.ip_address(ip)) - int(old_net.network_address)
+    except ValueError:
+        return None
+    if offset <= 0 or offset >= new_net.num_addresses - 1:
+        return None
+    new = ipaddress.ip_address(int(new_net.network_address) + offset)
+    return None if new == router_ip else str(new)
+
+
+def coerce(raw: dict) -> LanConfig:
+    """Разобрать новые настройки LAN. Если сменилась сеть, а диапазон пула остался от старой —
+    перенести его номера хостов в новую сеть (не помещаются — диапазон по умолчанию)."""
+    old_net = ipaddress.ip_interface(get_config().address).network
+    raw = dict(raw)
+    try:
+        iface = ipaddress.ip_interface(str(raw.get("address") or ""))
+    except ValueError:
+        return LanConfig.model_validate(raw)           # ошибку адреса покажет сама модель
+    nn = iface.network
+    if old_net != nn and iface.version == 4:
+        moved = False
+        for k in ("pool_start", "pool_end"):
+            v = raw.get(k)
+            try:
+                inside = v and ipaddress.ip_address(v) in nn
+            except ValueError:
+                continue
+            if v and not inside:
+                raw[k] = renumber(v, old_net, nn, iface.ip)
+                moved = True
+        if moved:
+            try:
+                return LanConfig.model_validate(raw)
+            except ValueError:
+                raw["pool_start"] = raw["pool_end"] = None
+    return LanConfig.model_validate(raw)
+
+
+def renumber_static(old: LanConfig, new: LanConfig, static: list[dict]) -> list[dict]:
+    """Сеть LAN сменилась: закреплённые адреса переезжают в новую сеть с тем же номером хоста."""
+    on, nn = ipaddress.ip_interface(old.address).network, ipaddress.ip_interface(new.address).network
+    if on == nn:
+        return static
+    rip = ipaddress.ip_interface(new.address).ip
+    out = []
+    for x in static:
+        ip = x.get("ip")
+        if ip and ipaddress.ip_address(ip) in on:
+            moved = renumber(ip, on, nn, rip)
+            x = {**x, "ip": moved} if moved else x
+        out.append(x)
+    return out
+
+
 def update(new: LanConfig) -> LanStatus:
+    """PUT /api/lan. Смена сети — диапазон (coerce) и закреплённые адреса переезжают следом."""
     old = get_config()
     try:
         apply(new)
@@ -371,12 +429,18 @@ def update(new: LanConfig) -> LanStatus:
         raise LanError(400, str(e)) from e
     lan_yaml, fw_yaml = new.to_yaml()
     with store.transaction() as cfg:
-        keep = _static_raw(cfg)                     # закреплённые адреса живут отдельно
+        keep = renumber_static(old, new, _static_raw(cfg))   # закреплённые адреса живут отдельно
         if keep:
             lan_yaml["dhcp-server"]["static-leases"] = keep
         cfg["lan"] = lan_yaml
         cfg.setdefault("firewall", {})
         cfg["firewall"] = {**(cfg["firewall"] or {}), **fw_yaml}
+    if keep:
+        try:                                        # адреса могли переехать в новую сеть
+            write_hosts_file()
+            reload_dnsmasq()
+        except Exception as e:  # noqa: BLE001
+            print(f"[lan] WARNING: закреплённые адреса: {e}")
     return status()
 
 

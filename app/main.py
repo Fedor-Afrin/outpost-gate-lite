@@ -19,6 +19,19 @@ from app.services import vpn as vpn_svc
 from app.services import wan as wan_svc
 
 
+WATCH_PERIOD = 10   # секунд: сторож VPN проверяет handshake / PPP
+
+
+async def _vpn_watchdog() -> None:
+    """Туннель «покраснел» (сон хоста, смена сети, сбой сервера) — переподключить. См. vpn.watch()."""
+    while True:
+        await asyncio.sleep(WATCH_PERIOD)
+        try:
+            await asyncio.to_thread(vpn_svc.watch)
+        except Exception as e:  # noqa: BLE001 — сторож не должен падать
+            print(f"[vpn] ERROR: сторож: {e}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     auth.ensure_admin()                        # первый запуск: admin + пароль в docker logs
@@ -27,7 +40,9 @@ async def lifespan(_: FastAPI):
     # в отдельном потоке: pyroute2 не должен видеть цикл событий uvicorn
     await asyncio.to_thread(agent.apply_startup)
     ssh = await ssh_server.start()             # CLI в стиле MikroTik по SSH
+    watchdog = asyncio.create_task(_vpn_watchdog())
     yield
+    watchdog.cancel()
     if ssh:
         ssh.close()
     vpn_svc.stop_all()

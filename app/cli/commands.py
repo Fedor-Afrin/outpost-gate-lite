@@ -61,6 +61,8 @@ class Ctx:
     shell: Callable[[], None] | None = None
     numbers: dict = field(default_factory=dict)     # меню -> [объект строки 0, строки 1, ...]
     detail: bool = False                            # print detail
+    lang: str = "en"                                # язык подсказок Linux-синтаксиса: en / ru / he (sl1/sl2/sl3)
+    color: bool = False                             # цвета: только живая сессия с терминалом
     sleep: Callable[[float], None] = time.sleep
 
 
@@ -582,8 +584,8 @@ def filter_move(ctx, pos, named):
         ctx.api.post(f"/api/firewall/rules/{rule['id']}/move", {"direction": "down" if steps > 0 else "up"})
 
 
-NAT_FIELDS = ("chain", "action", "protocol", "dst-port", "to-addresses", "to-ports", "src-address", "comment",
-              "disabled")
+NAT_FIELDS = ("chain", "action", "protocol", "dst-port", "to-addresses", "to-ports", "src-address",
+              "in-interface-list", "comment", "disabled")
 
 
 def _nat_from_args(named: dict, base: dict | None = None) -> dict:
@@ -596,6 +598,12 @@ def _nat_from_args(named: dict, base: dict | None = None) -> dict:
             body[api] = named[cli] or None
     if "to-ports" in named:
         body["to_port"] = int(named["to-ports"]) if named["to-ports"] else None
+    if "in-interface-list" in named:
+        v = (named["in-interface-list"] or "wan").lower().replace(" ", "")
+        zones = {"wan": "wan", "vpn": "vpn", "wan,vpn": "any", "vpn,wan": "any", "all": "any", "any": "any"}
+        if v not in zones:
+            raise CliError("in-interface-list: WAN, VPN или WAN,VPN")
+        body["from_zone"] = zones[v]
     if "disabled" in named:
         body["enabled"] = not yes(named["disabled"])
     if body.get("protocol") in ("tcp,udp", "udp,tcp"):
@@ -604,17 +612,18 @@ def _nat_from_args(named: dict, base: dict | None = None) -> dict:
 
 
 def _nat_body(f: dict) -> dict:
-    return {k: f.get(k) for k in ("enabled", "protocol", "wan_port", "to_ip", "to_port", "src", "description")}
+    return {k: f.get(k) for k in ("enabled", "protocol", "wan_port", "to_ip", "to_port", "src", "description",
+                                  "from_zone") if k in f}
 
 
 def nat_print(ctx, pos, named):
     fw = ctx.api.get("/api/firewall")
     fwd = fw["forwards"]
     ctx.numbers["/ip firewall nat"] = fwd
-    table(ctx, ["chain", "action", "protocol", "dst-port", "to-addresses", "to-ports", "src-address", "packets",
-                "comment"],
-          [["dstnat", "dst-nat", f["protocol"], f["wan_port"], f["to_ip"], f.get("to_port"), f.get("src"),
-            f["packets"], f.get("description")] for f in fwd],
+    table(ctx, ["chain", "action", "protocol", "in-interface-list", "dst-port", "to-addresses", "to-ports",
+                "src-address", "packets", "comment"],
+          [["dstnat", "dst-nat", f["protocol"], {"wan": "WAN", "vpn": "VPN", "any": "WAN,VPN"}[f.get("from_zone", "wan")],
+            f["wan_port"], f["to_ip"], f.get("to_port"), f.get("src"), f["packets"], f.get("description")] for f in fwd],
           flags=["X" if not f["enabled"] else "" for f in fwd], legend="X - disabled")
     for line in fw["system"]["nat"]:
         ctx.out(f";;; srcnat: {line}")
@@ -652,7 +661,7 @@ def dns_print(ctx, pos, named):
 
 def service_print(ctx, pos, named):
     wan_open = ctx.api.get("/api/lan")["config"]["wan_management"]
-    api_port, ssh_port = os.getenv("API_PORT", "8000"), os.getenv("CLI_SSH_PORT", "22")
+    api_port, ssh_port = os.getenv("API_PORT", "80"), os.getenv("CLI_SSH_PORT", "22")
     table(ctx, ["name", "port", "available-from"],
           [["www", api_port, "LAN, VPN" + (", WAN" if wan_open else "")],
            ["ssh", ssh_port, "LAN, VPN" + (", WAN" if wan_open else "")]],
@@ -706,7 +715,11 @@ def vpn_print(ctx, pos, named):
              ("last-handshake", f"{int(time.time() - hs)}s ago" if hs else None),
              ("ipsec", st.get("ipsec_up") if kind == "l2tp" else None),
              ("rx", fmt_bytes(st.get("rx_bytes"))), ("tx", fmt_bytes(st.get("tx_bytes"))),
-             ("public-key", st.get("public_key"))])
+             ("public-key", st.get("public_key")),
+             ("management", c.get("management")), ("router-direct", c.get("router_direct") and c["mode"] == "full"),
+             ("reconnect", c.get("reconnect")), ("reconnects", st.get("reconnects") or None),
+             ("last-reconnect", f"{int(time.time() - st['last_reconnect'])}s ago: {st.get('reconnect_reason')}"
+                                if st.get("last_reconnect") else None)])
 
 
 # --- /system, /user, /password, /log ---------------------------------------------------------------------------------
@@ -844,21 +857,36 @@ def _iface(named) -> str | None:
     return iface
 
 
+def _resolved(ctx, host: str, family: int | None = None) -> str:
+    """Имя -> адрес через DNS роутера (видны локальные имена: nas, nas.lan)."""
+    from app.services import tools
+    try:
+        ip, via = tools.resolve_sync(host, family)
+    except tools.ToolError as e:
+        raise CliError(f"failure: {e}") from e
+    if ip != host:
+        ctx.out(f"{host} -> {ip} ({via})")
+    return ip
+
+
 def ping(ctx, pos, named):
     host = _host(pos, named)
     count = int(named.get("count", 4))
-    cmd = ["ping", "-6" if ":" in host else "-4", "-n", "-c", str(max(1, min(count, 1000)))]
+    family = 6 if ":" in host else 4
+    ip = _resolved(ctx, host, family)
+    cmd = ["ping", f"-{family}", "-n", "-c", str(max(1, min(count, 1000)))]
     if iface := _iface(named):
         cmd += ["-I", iface]
-    _run_live(ctx, cmd + [host])
+    _run_live(ctx, cmd + [ip])
 
 
 def traceroute(ctx, pos, named):
     host = _host(pos, named)
+    ip = _resolved(ctx, host)
     cmd = ["traceroute", "-I", "-n", "-q", "1", "-w", "2", "-m", str(int(named.get("max-hops", 30)))]
     if iface := _iface(named):
         cmd += ["-i", iface]
-    _run_live(ctx, cmd + [host])
+    _run_live(ctx, cmd + [ip])
 
 
 def dns_lookup(ctx, pos, named):
@@ -867,9 +895,23 @@ def dns_lookup(ctx, pos, named):
         raise CliError("dns-lookup name=example.com")
     r = ctx.api.get(f"/api/tools/dns?host={urllib.parse.quote(name)}")
     if r.get("error"):
-        raise CliError(f"failure: {r['error']}")
-    for a in r["addresses"]:
-        ctx.out(f"{r['host']}  {a}")
+        raise CliError(f"failure: {r['host']}: {r['error']}" + (f" [{r['server']}]" if r.get("server") else ""))
+    table(ctx, ["name", "address", "server", "time"],
+          [[r["host"], a, r.get("server"), f"{r['time_ms']}ms" if r.get("time_ms") is not None else None]
+           for a in r["addresses"]], numbered=False)
+
+
+def resolve_cmd(ctx, pos, named):
+    """:resolve nas — как в RouterOS: адрес имени через DNS роутера."""
+    name = named.get("domain-name") or (pos[0] if pos else "")
+    if not name:
+        raise CliError(":resolve domain-name=nas.lan")
+    from app.services import tools
+    try:
+        ip, _ = tools.resolve_sync(tools.check_host(name))
+    except tools.ToolError as e:
+        raise CliError(f"failure: {e}") from e
+    ctx.out(ip)
 
 
 def ip_scan(ctx, pos, named):
@@ -970,7 +1012,7 @@ ROOT = Menu("OutpostGate Lite", {
                 "add": Cmd(nat_add, "add chain=dstnat action=dst-nat protocol=tcp dst-port=8080 "
                                     "to-addresses=192.168.88.20 to-ports=80", NAT_FIELDS,
                            {"chain": ["dstnat"], "action": ["dst-nat"], "protocol": ["tcp", "udp", "tcp,udp"],
-                            "disabled": YESNO}),
+                            "in-interface-list": ["WAN", "VPN", "WAN,VPN"], "disabled": YESNO}),
                 "set": Cmd(nat_set, "изменить: set 0 параметр=значение", ("numbers",) + NAT_FIELDS),
                 "enable": Cmd(_nat_toggle(True), "включить", ("numbers",)),
                 "disable": Cmd(_nat_toggle(False), "выключить", ("numbers",)),
@@ -1016,10 +1058,12 @@ ROOT = Menu("OutpostGate Lite", {
     }),
     "ping": Cmd(ping, "ping 8.8.8.8 count=4 interface=wg0", ("address", "count", "interface"), IFACE),
     "traceroute": Cmd(traceroute, "traceroute 8.8.8.8", ("address", "max-hops", "interface"), IFACE),
+    "resolve": Cmd(resolve_cmd, "адрес имени через DNS роутера: :resolve nas | :resolve nas.lan",
+                   ("domain-name",)),
     "export": Cmd(export, "вся конфигурация (router.yaml)"),
     "quit": Cmd(quit_cmd, "выйти"),
 })
-GLOBAL = ("ping", "traceroute", "export", "quit", "password")      # работают из любого меню
+GLOBAL = ("ping", "traceroute", "resolve", "export", "quit", "password")      # работают из любого меню
 
 
 def node_at(path: list[str]) -> Menu:
@@ -1055,6 +1099,8 @@ def parse(line: str, cwd: list[str]) -> tuple[list[str], Cmd | None, list[str]]:
         tokens = shlex.split(line)
     except ValueError as e:
         raise CliError(f"syntax error ({e})") from e
+    if tokens and tokens[0].startswith(":") and len(tokens[0]) > 1:   # :resolve, :put — команды RouterOS
+        tokens[0] = tokens[0][1:]
     if tokens and tokens[0].startswith("/"):          # абсолютный путь: /ip address  или  /ip/address/print
         path = []
         rest = [p for p in tokens[0].split("/") if p] + tokens[1:]
@@ -1091,7 +1137,7 @@ def execute(ctx: Ctx, line: str, cwd: list[str]) -> list[str]:
     pos, named = split_args(args)
     named = expand_params(cmd, named)
     ctx.detail = "detail" in pos
-    pos = [p for p in pos if p != "detail"]
+    pos = [p for p in pos if p not in ("detail", "without-paging")]   # without-paging — от Ansible / скриптов
     try:
         cmd.fn(ctx, pos, named)
     except ApiError as e:

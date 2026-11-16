@@ -191,9 +191,12 @@ function lanPortsAutoChanged() {
   $("#lan-port-list").querySelectorAll("input").forEach((i) => { i.disabled = auto; });
 }
 
+let lanAddr = null;      // адрес LAN, с которым открыта форма: сменилась сеть — пул и закреплённые адреса переедут
+
 function fillLanForm(l) {
   const f = $("#lan-form");
   const c = l.config;
+  lanAddr = c.address;
   f.enabled.checked = c.enabled;
   f.address.value = c.address;
   f.ports_auto.checked = c.ports.length === 0;
@@ -235,9 +238,18 @@ async function loadLan() {
 
 $("#lan-form").addEventListener("change", (ev) => { if (ev.target.name === "ports_auto") lanPortsAutoChanged(); });
 
+function ipNet(cidr) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec((cidr || "").trim());
+  if (!m) return null;
+  const ip = ((+m[1] << 24) | (+m[2] << 16) | (+m[3] << 8) | +m[4]) >>> 0;
+  const bits = +m[5], mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return `${(ip & mask) >>> 0}/${bits}`;
+}
+
 $("#lan-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = ev.target;
+  const prev = lanAddr;
   $("#lan-error").textContent = "";
   $("#lan-ok").textContent = "";
   const ports = f.ports_auto.checked ? []
@@ -254,7 +266,9 @@ $("#lan-form").addEventListener("submit", async (ev) => {
       wan_management: f.wan_management.checked,
     });
     fillLanForm(l);
-    $("#lan-ok").textContent = "Применено";
+    $("#lan-ok").textContent = prev && ipNet(prev) !== ipNet(l.config.address)
+      ? I18N.t("Применено: сеть изменена, диапазон DHCP и закреплённые адреса перенесены в новую сеть")
+      : "Применено";
     await loadLan();
   } catch (e) {
     $("#lan-error").textContent = e.message;
@@ -338,6 +352,12 @@ async function loadVpn() {
   return vpnKind === "l2tp" ? loadL2tp() : loadWg();
 }
 
+function reconnectText(s) {
+  if (s.config.reconnect === false) return I18N.t("сторож выключен");
+  if (!s.reconnects) return I18N.t("не было");
+  return I18N.t("{n}, последнее {when}: {why}", { n: s.reconnects, when: ago(s.last_reconnect), why: s.reconnect_reason || "" });
+}
+
 function ago(ts) {
   const s = Math.round(Date.now() / 1000 - ts);
   return s < 60 ? `${s} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : new Date(ts * 1000).toLocaleString(I18N.locale());
@@ -355,6 +375,9 @@ function fillWgForm(c, privateKeySet) {
   f.querySelector(`input[name=mode][value=${c.mode}]`).checked = true;
   f.killswitch.checked = c.killswitch;
   f.nat.checked = c.nat;
+  f.management.checked = !!c.management;
+  f.reconnect.checked = c.reconnect !== false;
+  f.router_direct.checked = c.router_direct !== false;
   f.private_key.value = c.private_key ?? "";
   f.private_key.placeholder = privateKeySet ? "задан — пусто = не менять" : "";
   f.addresses.value = c.addresses.join(", ");
@@ -387,6 +410,7 @@ async function loadWg() {
   $("#vs-endpoint").textContent = w.config.endpoint ? `${w.config.endpoint}${w.endpoint_ip ? " (" + w.endpoint_ip + ")" : ""}` : "—";
   $("#vs-traffic").textContent = w.active ? `↓ ${fmt(w.rx_bytes)}  ↑ ${fmt(w.tx_bytes)}` : "—";
   $("#vs-pub").textContent = w.public_key ?? "—";
+  $("#vs-reconnect").textContent = reconnectText(w);
   $("#vs-error").textContent = w.error ?? "";
   if (!wgFormLoaded) { fillWgForm(w.config, w.private_key_set); wgFormLoaded = true; }
 }
@@ -402,7 +426,17 @@ $("#wg-parse").addEventListener("click", async () => {
   $("#wg-parse-msg").textContent = "";
   $("#wg-error").textContent = "";
   try {
-    const c = await api("POST", `/api/vpn/${vpnKind}/parse`, { text: $("#wg-import").value });
+    let c;
+    try {
+      c = await api("POST", `/api/vpn/${vpnKind}/parse`, { text: $("#wg-import").value });
+    } catch (e) {
+      if (vpnKind !== "wireguard" || !/AmneziaWG/.test(e.message)) throw e;
+      const text = $("#wg-import").value;           // конфиг AmneziaWG на вкладке WireGuard — перейти сами
+      selectVpnTab("amneziawg");
+      await new Promise((ok) => setTimeout(ok, 300));
+      $("#wg-import").value = text;
+      c = await api("POST", "/api/vpn/amneziawg/parse", { text });
+    }
     c.enabled = true;
     fillWgForm(c, false);
     $("#wg-parse-msg").textContent = "Поля заполнены — проверьте и нажмите «Применить»";
@@ -428,6 +462,9 @@ $("#wg-form").addEventListener("submit", async (ev) => {
       mode: f.querySelector("input[name=mode]:checked").value,
       killswitch: f.killswitch.checked,
       nat: f.nat.checked,
+      management: f.management.checked,
+      reconnect: f.reconnect.checked,
+      router_direct: f.router_direct.checked,
       private_key: f.private_key.value || null,
       addresses: splitList(f.addresses.value),
       dns: splitList(f.dns.value),
@@ -458,6 +495,9 @@ function fillL2tpForm(st) {
   f.querySelector(`input[name=mode][value=${c.mode}]`).checked = true;
   f.killswitch.checked = c.killswitch;
   f.nat.checked = c.nat;
+  f.management.checked = !!c.management;
+  f.reconnect.checked = c.reconnect !== false;
+  f.router_direct.checked = c.router_direct !== false;
   f.server.value = c.server ?? "";
   f.psk.value = "";
   f.psk.placeholder = st.psk_set ? "задан — пусто = не менять" : "";
@@ -478,6 +518,7 @@ async function loadL2tp() {
   $("#ls2-server").textContent = st.config.server ? `${st.config.server}${st.endpoint_ip ? " (" + st.endpoint_ip + ")" : ""}` : "—";
   $("#ls2-ip").textContent = st.local_ip ? `${st.local_ip} ↔ ${st.remote_ip}` : "—";
   $("#ls2-traffic").textContent = st.connected ? `↓ ${fmt(st.rx_bytes)}  ↑ ${fmt(st.tx_bytes)}` : "—";
+  $("#ls2-reconnect").textContent = reconnectText(st);
   $("#ls2-error").textContent = st.error ?? "";
   if (!l2tpFormLoaded) { fillL2tpForm(st); l2tpFormLoaded = true; }
 }
@@ -495,6 +536,9 @@ $("#l2tp-form").addEventListener("submit", async (ev) => {
       mode: f.querySelector("input[name=mode]:checked").value,
       killswitch: f.killswitch.checked,
       nat: f.nat.checked,
+      management: f.management.checked,
+      reconnect: f.reconnect.checked,
+      router_direct: f.router_direct.checked,
       server: f.server.value || null,
       psk: f.psk.value || null,
       username: f.username.value || null,
@@ -554,12 +598,13 @@ async function loadFirewall() {
 
   if (fwTab === "forwards") {
     $("#pf-list").innerHTML = fwData.forwards.map((f) => `
-      <tr class="${f.enabled ? "" : "row-disabled"}"><td>${f.id}</td><td>${PROTO[f.protocol]}</td><td>${esc(f.wan_port)}</td>
+      <tr class="${f.enabled ? "" : "row-disabled"}"><td>${f.id}</td><td>${PROTO[f.protocol]}</td>
+        <td>${esc(I18N.t({ wan: "WAN", vpn: "VPN", any: "WAN и VPN" }[f.from_zone || "wan"]))}</td><td>${esc(f.wan_port)}</td>
         <td>${esc(f.to_ip)}</td><td>${f.to_port ?? esc(f.wan_port)}</td><td>${cidr(f.src)}</td>
         <td class="desc">${esc(f.description ?? "")}</td><td>${counter(f)}</td>
         <td class="actions"><button type="button" data-pf-edit="${f.id}">Изменить</button>
           <button type="button" data-pf-del="${f.id}" class="danger">Удалить</button></td></tr>`).join("")
-      || '<tr><td colspan="9" class="hint">пробросов нет</td></tr>';
+      || '<tr><td colspan="10" class="hint">пробросов нет</td></tr>';
     return;
   }
 
@@ -653,7 +698,7 @@ function openPfForm(fwd) {
   $("#pf-form-title").textContent = fwd ? `Проброс #${fwd.id} — изменить` : "Новый проброс";
   $("#pf-save").textContent = fwd ? "Сохранить" : "Добавить";
   const x = fwd ?? { protocol: "tcp", enabled: true };
-  f.protocol.value = x.protocol; f.wan_port.value = x.wan_port ?? ""; f.to_ip.value = x.to_ip ?? "";
+  f.protocol.value = x.protocol; f.from_zone.value = x.from_zone || "wan"; f.wan_port.value = x.wan_port ?? ""; f.to_ip.value = x.to_ip ?? "";
   f.to_port.value = x.to_port ?? ""; f.src.value = x.src ?? ""; f.description.value = x.description ?? "";
   f.enabled.checked = x.enabled;
   f.hidden = false;
@@ -667,7 +712,7 @@ $("#pf-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = ev.target;
   const body = {
-    protocol: f.protocol.value, wan_port: f.wan_port.value, to_ip: f.to_ip.value,
+    protocol: f.protocol.value, from_zone: f.from_zone.value, wan_port: f.wan_port.value, to_ip: f.to_ip.value,
     to_port: f.to_port.value ? Number(f.to_port.value) : null, src: f.src.value || null,
     description: f.description.value || null, enabled: f.enabled.checked,
   };
@@ -721,8 +766,8 @@ const TOOLS = {
   },
   dns: {
     fields: ["host"],
-    hint: "Разрешение имени через DNS роутера — так же, как его видят устройства LAN (через туннель, если VPN «весь трафик»).",
-    cols: ["Имя", "Адреса", "Время"],
+    hint: "Разрешение имени через DNS роутера (dnsmasq) — так же, как его видят устройства LAN. Короткое имя (nas) дополняется доменом .lan. Ping и traceroute тоже находят локальные имена.",
+    cols: ["Имя", "Адреса", "Сервер", "Время"],
   },
   neighbors: {
     fields: [],
@@ -808,7 +853,7 @@ async function runTool() {
     try {
       const d = await api("GET", `/api/tools/dns?host=${encodeURIComponent(f.host.value)}`);
       $("#tool-rows").innerHTML = `<tr><td>${esc(d.host)}</td><td>${d.error ? `<span class="flag-x">${esc(d.error)}</span>`
-        : d.addresses.map(esc).join("<br>")}</td><td>${ms(d.time_ms)}</td></tr>`;
+        : d.addresses.map(esc).join("<br>")}</td><td>${esc(d.server || "")}</td><td>${ms(d.time_ms)}</td></tr>`;
     } catch (e) { $("#tool-error").textContent = e.message; }
     return;
   }

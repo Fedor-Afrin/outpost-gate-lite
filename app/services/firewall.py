@@ -41,11 +41,18 @@ class VpnRules:
     killswitch: bool      # LAN → WAN напрямую запрещено (весь трафик только в туннель)
     inbound: bool         # из туннеля можно заходить в LAN и на роутер (site-to-site)
     ipsec_server: str | None = None   # L2TP/IPsec: впустить с WAN IKE, ESP и L2TP от этого сервера
+    management: bool = False          # из туннеля можно на роутер: веб, SSH, CLI, ping (при NAT)
+    router_direct: bool = False       # режим full: свои соединения роутера — мимо туннеля (метка BYPASS)
+    tunnel_dns: tuple = ()            # DNS туннеля — к ним роутер ходит через туннель
 
 
 def management_ports() -> list[int]:
-    """Веб/API и SSH-доступ к CLI роутера."""
-    return sorted({int(os.getenv("API_PORT", "8000")), int(os.getenv("CLI_SSH_PORT", "22"))})
+    """Веб/API и SSH-доступ к CLI роутера; в режиме host — и SSH самого сервера (HOST_SSH_PORT)."""
+    ports = {int(os.getenv("API_PORT", "80")), int(os.getenv("CLI_SSH_PORT", "22"))}
+    host_ssh = os.getenv("HOST_SSH_PORT", "")
+    if host_ssh.isdigit():
+        ports.add(int(host_ssh))
+    return sorted(ports)
 
 
 # --- правила пользователя -> nft ------------------------------------------------------
@@ -75,11 +82,17 @@ def render_rule(rule: FirewallRule, rid: int, ifaces: dict[str, str | None]) -> 
     return I + " ".join(parts) + "\n"
 
 
-def render_forward(fwd: PortForward, fid: int, wan: str) -> str:
+def render_forward(fwd: PortForward, fid: int, wan: str, vpn_iface: str | None = None) -> str:
+    """Проброс: с WAN, из VPN-туннеля (к устройству LAN с телефона через тот же сервер) или с обоих."""
+    zone = getattr(fwd, "from_zone", "wan")
+    ifaces = ([wan] if zone in ("wan", "any") else []) + ([vpn_iface] if zone in ("vpn", "any") and vpn_iface else [])
+    if not ifaces:
+        return ""                                # проброс из VPN, а туннель выключен
+    iif = f'"{ifaces[0]}"' if len(ifaces) == 1 else "{ " + ", ".join(f'"{n}"' for n in ifaces) + " }"
     proto = "{ tcp, udp }" if fwd.protocol == "tcp+udp" else fwd.protocol
     src = f"ip saddr {fwd.src} " if fwd.src else ""
     target = fwd.to_ip + (f":{fwd.to_port}" if fwd.to_port else "")
-    return (f'{I}iifname "{wan}" {src}meta l4proto {proto} th dport {fwd.wan_port} '
+    return (f'{I}iifname {iif} {src}meta l4proto {proto} th dport {fwd.wan_port} '
             f'counter dnat ip to {target} comment "fwd:{fid}"\n')
 
 
@@ -90,12 +103,16 @@ def ruleset(wan: str, lan: str, wan_management: bool, vpn: VpnRules | None = Non
     user_in = "".join(render_rule(r, rid, ifaces) for rid, r in rules if r.enabled and r.chain == "input")
     user_fwd = "".join(render_rule(r, rid, ifaces) for rid, r in rules if r.enabled and r.chain == "forward")
     active_fwd = [(fid, f) for fid, f in forwards if f.enabled]
-    dnat = "".join(render_forward(f, fid, wan) for fid, f in active_fwd)
+    dnat = "".join(render_forward(f, fid, wan, vpn.iface if vpn else None) for fid, f in active_fwd)
 
     mgmt = ", ".join(str(p) for p in management_ports())
     mgmt_rule = f'{I}tcp dport {{ {mgmt} }} accept   # управление с WAN (веб, SSH)\n' if wan_management else ""
-    input_vpn = f'{I}iifname "{vpn.iface}" drop            # из туннеля — только ответы\n' \
-        if vpn and not vpn.inbound else ""
+    input_vpn = ""
+    if vpn and not vpn.inbound:
+        if vpn.management:
+            input_vpn += (f'{I}iifname "{vpn.iface}" tcp dport {{ {mgmt} }} accept   # управление через туннель\n'
+                          f'{I}iifname "{vpn.iface}" icmp type echo-request accept\n')
+        input_vpn += f'{I}iifname "{vpn.iface}" drop            # из туннеля — только ответы\n'
     ipsec_rules = ""
     if vpn and vpn.ipsec_server:
         srv = vpn.ipsec_server
@@ -153,7 +170,30 @@ table inet {TABLE} {{
     chain postrouting {{
         type nat hook postrouting priority srcnat; policy accept;
 {post}    }}
-}}
+{render_router_direct(vpn)}}}
+"""
+
+
+PRIVATE_NETS = "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, " \
+               "224.0.0.0/4, 255.255.255.255"
+
+
+def render_router_direct(vpn: "VpnRules | None") -> str:
+    """Режим full: соединения, начатые самим роутером, к публичным адресам — с меткой 0x200
+    (ip rule отправит их через WAN). Ответы на входящие (управление через туннель), частные сети,
+    DNS туннеля и ICMP (ping/traceroute проверяют туннель) — без метки, как раньше."""
+    if not vpn or not vpn.router_direct:
+        return ""
+    dns = ", ".join(vpn.tunnel_dns)
+    skip_dns = f"{I}ip daddr {{ {dns} }} return\n" if dns else ""
+    return f"""
+    chain output_direct {{
+        type route hook output priority mangle; policy accept;
+{I}ct direction reply return
+{I}meta l4proto {{ icmp, ipv6-icmp }} return
+{I}ip daddr {{ {PRIVATE_NETS} }} return
+{skip_dns}{I}meta nfproto ipv4 meta mark set meta mark or 0x200   # трафик самого роутера — через WAN
+    }}
 """
 
 
@@ -164,7 +204,11 @@ def system_rules(wan: str | None, wan_management: bool, vpn: VpnRules | None) ->
            "Из LAN — разрешено всё"]
     if vpn:
         inp.append(f"Из VPN ({vpn.iface}) — " + ("разрешено всё (site-to-site)" if vpn.inbound
-                                                 else "только ответы (режим NAT)"))
+                                                 else f"управление (порты {mgmt}) и ping, остальное — только ответы"
+                                                 if vpn.management else "только ответы (режим NAT)"))
+    if vpn and vpn.router_direct:
+        inp.append("Свои соединения роутера (обновления, Docker Hub, apt) — напрямую через WAN, не через VPN; "
+                   "ping и DNS туннеля — через туннель")
     inp.append(f"С WAN ({wan}): ping и DHCP" + (f", управление (порты {mgmt})" if wan_management else ""))
     if vpn and vpn.ipsec_server:
         inp.append(f"С WAN от сервера L2TP {vpn.ipsec_server}: IKE, ESP, L2TP")

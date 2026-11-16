@@ -1,8 +1,8 @@
 # Режим DEV: запуск на рабочем компьютере.
 # Контейнер в СВОЁМ network namespace — сеть хоста он не видит и не меняет.
 #   docker compose up --build
-#   http://localhost:8000      — веб-интерфейс
-#   http://localhost:8000/docs — Swagger
+#   http://localhost:8001      — веб-интерфейс (в контейнере порт 80)
+#   http://localhost:8001/docs — Swagger
 #   ssh -p 2222 admin@localhost — командная строка в стиле MikroTik
 name: outpost-gate-lite   # имя проекта не зависит от названия папки
 services:
@@ -23,7 +23,7 @@ services:
     sysctls:
       net.ipv4.ip_forward: "1"
     ports:
-      - "8000:8000"
+      - "8001:80"
       - "2222:22"        # SSH -> CLI роутера
     volumes:
       - ./app:/opt/outpost-gate-lite/app       # правки кода без пересборки

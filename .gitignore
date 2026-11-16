@@ -5,3 +5,6 @@ __pycache__/
 data/
 .pytest_cache/
 .backup/
+/update_*.sh
+/stage*.sh
+/hotfix_*.sh
