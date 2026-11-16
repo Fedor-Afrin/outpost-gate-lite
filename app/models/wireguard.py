@@ -2,18 +2,30 @@
 
 AmneziaWG — тот же WireGuard плюс параметры обфускации в [Interface]
 (Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5, J1–J3, Itime): мусорные пакеты и
-изменённые заголовки, чтобы DPI не узнавал протокол.
+изменённые заголовки, чтобы DPI не узнавал протокол. AmneziaWG 3.x добавил
+HeaderProtectionKey, ContentPaddingAddition, RandomTrailers, DisableCookies и
+тайминги диапазонами (RekeyAfterTime = 100-120 …).
+
+Импорт: текст .conf (wg-quick) или ссылка / файл vpn:// из приложения Amnezia.
 """
 from __future__ import annotations
 
+import base64
 import ipaddress
+import json
 import re
+import zlib
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$")   # 32 байта в base64
-AWG_KEY_RE = re.compile(r"^(jc|jmin|jmax|s[1-4]|h[1-4]|i[1-5]|j[1-3]|itime)$", re.IGNORECASE)
+# AmneziaWG 3.x: параметры устройства, пишутся в [Interface] — имя -> как его пишет awg
+AWG3_KEYS = {k.lower(): k for k in (
+    "HeaderProtectionKey", "ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+    "KeepaliveTimeout", "MaxHandshakeAttempts", "RandomTrailers", "DisableCookies")}
+AWG_KEY_RE = re.compile(r"^(jc|jmin|jmax|s[1-4]|h[1-4]|i[1-5]|j[1-3]|itime|" + "|".join(AWG3_KEYS) + r")$",
+                        re.IGNORECASE)
 ENDPOINT_RE = re.compile(r"^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):(\d{1,5})$")
 
 
@@ -42,6 +54,12 @@ class WgConfig(BaseModel):
         "full", description="full — весь трафик в туннель; split — только сети компании (allowed_ips)")
     nat: bool = Field(True, description="Маскировать LAN за адресом туннеля (нужно, если сервер не знает сеть LAN)")
     killswitch: bool = Field(True, description="В режиме full: без туннеля — без интернета")
+    management: bool = Field(False, description="Пускать к роутеру из туннеля: веб, SSH, CLI и ping "
+                                                "(с телефона через тот же VPN-сервер). При выключенном NAT открыто и так")
+    reconnect: bool = Field(True, description="Сторож: нет handshake с сервером дольше 3,5 минут "
+                                              "(сон хоста, смена сети, сбой) — переподключиться")
+    router_direct: bool = Field(True, description="Режим full: трафик самого роутера (обновления, Docker Hub, apt) "
+                                                  "идёт напрямую через WAN — не зависит от VPN. Устройства LAN — через туннель")
     obfuscation: dict[str, str] = Field(
         default_factory=dict, description="Только AmneziaWG: Jc, Jmin, Jmax, S1, S2, H1–H4 …",
         examples=[{"Jc": "4", "Jmin": "40", "Jmax": "70", "S1": "0", "S2": "0", "H1": "1"}])
@@ -56,7 +74,9 @@ class WgConfig(BaseModel):
                 raise ValueError(f"неизвестный параметр AmneziaWG: {key}")
             if not value or "\n" in value:
                 raise ValueError(f"пустое или многострочное значение {key}")
-            canon = key[0].upper() + key[1:].lower() if key.lower() in ("jc", "jmin", "jmax", "itime") else key.upper()
+            low = key.lower()
+            canon = (AWG3_KEYS[low] if low in AWG3_KEYS
+                     else key[0].upper() + key[1:].lower() if low in ("jc", "jmin", "jmax", "itime") else key.upper())
             out[canon] = value
         return out
 
@@ -164,6 +184,9 @@ class WgConfig(BaseModel):
             "mode": self.mode,
             "nat": self.nat,
             "killswitch": self.killswitch,
+            "management": self.management,
+            "reconnect": self.reconnect,
+            "router-direct": self.router_direct,
             **({"obfuscation": self.obfuscation} if self.obfuscation else {}),
         }
 
@@ -178,12 +201,67 @@ class WgConfig(BaseModel):
             endpoint=p.get("endpoint"), allowed_ips=p.get("allowed-ips") or [],
             keepalive=p.get("persistent-keepalive", 25),
             mode=d.get("mode", "full"), nat=d.get("nat", True), killswitch=d.get("killswitch", True),
+            management=d.get("management", False),
+            reconnect=d.get("reconnect", True), router_direct=d.get("router-direct", True),
             obfuscation=d.get("obfuscation") or {},
         )
 
 
+def decode_vpn_link(text: str) -> str:
+    """vpn://… (ссылка или файл .vpn из приложения Amnezia) -> текст конфига wg-quick.
+
+    Внутри: base64url( 4 байта длины + zlib(JSON) ) — формат qCompress. В JSON — контейнеры
+    (amnezia-awg2, amnezia-wireguard …), у каждого last_config с полем config = готовый .conf;
+    $PRIMARY_DNS / $SECONDARY_DNS в нём — подставить из dns1 / dns2."""
+    s = "".join(text.split())
+    b64 = s[len("vpn://"):]
+    try:
+        raw = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+    except (ValueError, TypeError) as e:
+        raise ValueError("ссылка vpn:// повреждена (не base64)") from e
+    try:
+        data = zlib.decompress(raw[4:])
+    except zlib.error:
+        data = raw                                   # старые версии: JSON без сжатия
+    try:
+        j = json.loads(data)
+    except ValueError as e:
+        raise ValueError("ссылка vpn:// повреждена (внутри не JSON)") from e
+    containers = j.get("containers") or []
+    default = j.get("defaultContainer")
+    for c in sorted(containers, key=lambda c: c.get("container") != default):
+        for v in c.values():
+            if not isinstance(v, dict) or not v.get("last_config"):
+                continue
+            lc = v["last_config"]
+            try:
+                lc = json.loads(lc) if isinstance(lc, str) else lc
+            except ValueError:
+                continue
+            conf = lc.get("config") if isinstance(lc, dict) else None
+            if conf and "[Interface]" in conf:
+                dns = [x for x in (j.get("dns1"), j.get("dns2")) if x]
+                return (conf.replace("$PRIMARY_DNS", dns[0] if dns else "")
+                            .replace("$SECONDARY_DNS", dns[1] if len(dns) > 1 else ""))
+    kinds = ", ".join(c.get("container", "?") for c in containers) or "нет"
+    raise ValueError(f"в ссылке vpn:// нет готового конфига WireGuard / AmneziaWG (контейнеры: {kinds}). "
+                     "В приложении Amnezia: «Поделиться» → протокол AmneziaWG → формат AmneziaWG или WireGuard")
+
+
+def _first(v: str | None, default: int) -> int:
+    """PersistentKeepalive = 25 или диапазон AmneziaWG 3 «25-35» -> 25."""
+    if not v:
+        return default
+    m = re.match(r"^\s*(\d+)", v)
+    if not m:
+        raise ValueError(f"неверное значение PersistentKeepalive: {v}")
+    return int(m.group(1))
+
+
 def parse_wg_quick(text: str) -> WgConfig:
-    """Разобрать конфиг wg-quick (.conf от сервера WireGuard / Amnezia) в WgConfig."""
+    """Разобрать конфиг wg-quick (.conf от сервера WireGuard / Amnezia) или ссылку vpn:// в WgConfig."""
+    if text.strip().lower().startswith("vpn://"):
+        text = decode_vpn_link(text)
     section, iface, peer, obf = None, {}, {}, {}
     for raw in text.splitlines():
         # комментарий # отрезаем, кроме I1–I5 у AmneziaWG: там # — часть значения
@@ -199,7 +277,8 @@ def parse_wg_quick(text: str) -> WgConfig:
             continue
         key, value = (x.strip() for x in line.split("=", 1))
         if section == "interface" and AWG_KEY_RE.match(key):
-            obf[key] = value
+            if value:                                  # Amnezia пишет пустые I1 = … — пропускаем
+                obf[key] = value
             continue
         target = iface if section == "interface" else peer if section == "peer" else None
         if target is not None:
@@ -219,7 +298,7 @@ def parse_wg_quick(text: str) -> WgConfig:
         preshared_key=peer.get("presharedkey"),
         endpoint=peer.get("endpoint"),
         allowed_ips=allowed,
-        keepalive=int(peer.get("persistentkeepalive", 25)),
+        keepalive=_first(peer.get("persistentkeepalive"), 25),
         mode="full" if full else "split",
         obfuscation=obf,
     )
@@ -238,3 +317,6 @@ class WgStatus(BaseModel):
     rx_bytes: int = 0
     tx_bytes: int = 0
     error: str | None = None
+    reconnects: int = 0                   # сколько раз сторож переподключал туннель
+    last_reconnect: float | None = None   # unix time
+    reconnect_reason: str | None = None

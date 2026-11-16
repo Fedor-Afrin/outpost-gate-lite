@@ -1,20 +1,36 @@
 # Развёртывание на сервере / VM
 
-Docker по умолчанию ставит политику `FORWARD` в `DROP` — транзитный трафик
-роутера перестанет ходить. Поэтому Docker'у запрещаем трогать фаервол:
+Проще всего — установщиком из корня проекта:
 
+```bash
+sudo ./install.sh              # мастер: порты WAN / LAN, адрес LAN, пароль admin
+sudo ./install.sh --update     # после update_*.sh: пересобрать образ и перезапустить
+sudo ./install.sh --status
+sudo ./install.sh --uninstall  # настройки остаются; с --purge — удалить и их
+./install.sh --help            # установка без вопросов (для Ansible и т. п.)
+```
+
+Что он делает:
+- ставит Docker и запрещает ему трогать фаервол (`daemon.json: iptables=false`) — иначе Docker
+  ставит `FORWARD DROP` и транзит роутера перестаёт ходить; уже стоящий `FORWARD DROP` снимает;
+- убирает порты роутера из-под netplan/systemd-networkd и NetworkManager
+  (порт, через который вы подключены по SSH, без вашего согласия не трогается);
+- включает `ip_forward`, модули ядра для WireGuard и L2TP (и в автозагрузку);
+- даёт самому серверу свои DNS (порт WAN забирает роутер — без этого образ не соберётся при обновлении);
+- собирает образ в сети сервера (`docker build --network host`), пишет первый router.yaml и запускает.
+
+Веб-интерфейс — на порту 80 (`http://<адрес LAN>`); если порт 80 на сервере занят — на 8000.
+Сменить потом: `sudo ./install.sh --update --api-port 8080`.
+
+Вручную (без установщика):
 ```bash
 sudo cp daemon.json.example /etc/docker/daemon.json
 sudo systemctl restart docker
-
 sudo mkdir -p /etc/outpost-gate-lite /var/lib/outpost-gate-lite
 sudo cp ../../config/router.yaml /etc/outpost-gate-lite/
-
 docker compose up -d --build
 ```
-
-Также отключите/ограничьте netplan и NetworkManager на управляемых интерфейсах,
-чтобы они не перетирали настройки роутера.
+и отключите netplan и NetworkManager на управляемых интерфейсах, чтобы они не перетирали настройки роутера.
 
 ## Переход со старых названий (ubuntu-router или outpost-gate -> outpost-gate-lite)
 

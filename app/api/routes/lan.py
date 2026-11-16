@@ -8,7 +8,9 @@
   DELETE /api/lan/static-leases/{mac}   открепить
 Закреплённые адреса применяются без перезапуска LAN (dnsmasq перечитывает их по SIGHUP).
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.models.lan import LanConfig, LanStatus, StaticLease, StaticLeaseView
 from app.services import lan as svc
@@ -21,8 +23,17 @@ def get_lan():
     return svc.status()
 
 
+def _coerce(raw: dict) -> LanConfig:
+    """Тело PUT: при смене сети диапазон DHCP из старой сети переезжает в новую, а не даёт ошибку."""
+    try:
+        return svc.coerce(raw)
+    except ValidationError as e:
+        raise RequestValidationError(e.errors(include_url=False, include_context=False))
+
+
 @router.put("", response_model=LanStatus)
-def set_lan(data: LanConfig):
+def set_lan(raw: dict = Body(...)):
+    data = _coerce(raw)
     try:
         return svc.update(data)
     except svc.LanError as e:

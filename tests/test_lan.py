@@ -121,7 +121,7 @@ def test_firewall_ruleset():
     rs = firewall.ruleset("eth1", "br-lan", wan_management=True)
     assert 'oifname "eth1" masquerade' in rs
     assert 'iifname "br-lan" oifname "eth1" accept' in rs
-    assert "policy drop" in rs and "tcp dport { 22, 8000 } accept" in rs
+    assert "policy drop" in rs and "tcp dport { 22, 80 } accept" in rs
     assert rs.index("delete table inet outpost_gate_lite") < rs.index("table inet outpost_gate_lite {")
     assert "tcp dport" not in firewall.ruleset("eth1", "br-lan", wan_management=False)
 
@@ -191,3 +191,45 @@ def test_leases_mark_static(env, tmp_path):
     (tmp_path / "data" / "dnsmasq.leases").write_text("0 00:0b:82:aa:bb:cc 192.168.88.5 gxp *\n")
     row = lan.leases()[0]
     assert row.static and row.name == "Телефон" and row.expires is None
+
+
+def test_change_network_moves_pool_and_static(env):
+    """Смена адреса LAN: старый пул из формы и закреплённые адреса переезжают в новую сеть."""
+    store, _, calls = env
+    from app.models.lan import StaticLease
+    lan.update(LanConfig(enabled=True, pool_start="192.168.88.100", pool_end="192.168.88.200"))
+    lan.add_static(StaticLease(mac="00:0b:82:aa:bb:cc", ip="192.168.88.5", name="phone"))
+    lan.add_static(StaticLease(mac="00:0b:82:aa:bb:cd", ip="192.168.88.20", name="pc"))
+
+    raw = lan.get_config().model_dump()                            # так присылает веб: пул — старый
+    raw["address"] = "192.168.1.1/24"
+    with pytest.raises(ValueError):
+        LanConfig.model_validate(raw)                              # раньше — ошибка «вне сети»
+    new = lan.coerce(raw)
+    assert (new.pool_start, new.pool_end) == ("192.168.1.100", "192.168.1.200")
+    lan.update(new)
+    y = store.load()["lan"]
+    assert [x["ip"] for x in y["dhcp-server"]["static-leases"]] == ["192.168.1.5", "192.168.1.20"]
+    assert all(v.valid for v in lan.static_view())
+
+
+def test_change_network_smaller_prefix(env):
+    """Новая сеть меньше: диапазон не помещается — по умолчанию; адрес на месте роутера не переносится."""
+    store, _, _ = env
+    from app.models.lan import StaticLease
+    lan.update(LanConfig(enabled=True, pool_start="192.168.88.100", pool_end="192.168.88.250"))
+    lan.add_static(StaticLease(mac="00:0b:82:aa:bb:cc", ip="192.168.88.10", name="a"))
+    raw = lan.get_config().model_dump()
+    raw["address"] = "10.10.0.10/27"
+    new = lan.coerce(raw)
+    assert (new.pool_start, new.pool_end) == ("10.10.0.11", "10.10.0.30")
+    lan.update(new)
+    assert store.load()["lan"]["dhcp-server"]["static-leases"][0]["ip"] == "192.168.88.10"   # совпал бы с роутером
+
+
+def test_same_network_keeps_pool(env):
+    lan.update(LanConfig(enabled=True, pool_start="192.168.88.100", pool_end="192.168.88.200"))
+    raw = lan.get_config().model_dump()
+    raw["address"] = "192.168.88.254/24"
+    new = lan.coerce(raw)
+    assert (new.pool_start, new.pool_end) == ("192.168.88.100", "192.168.88.200")

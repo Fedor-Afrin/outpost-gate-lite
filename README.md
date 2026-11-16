@@ -1,71 +1,148 @@
 # OutpostGate Lite
 
-**VPN-шлюз для удалённого сотрудника** на любом Linux с Docker: один WAN в интернет, LAN-порты для
-телефона и компьютера, туннель в корпоративную сеть (WireGuard / AmneziaWG / L2TP).
-Управление через **FastAPI**, веб-интерфейс и CLI в стиле **MikroTik RouterOS**;
-конфиг как единый источник правды, Safe Mode, встроенные инструменты диагностики.
+**A compact VPN gateway for a remote employee**, running in Docker on any Linux box (a VM, a mini PC,
+a NanoPi). One WAN to the internet, LAN ports for the phone and the computer, a tunnel to the company
+network. You manage it from a web UI, a REST API, or a command line that speaks both
+**MikroTik RouterOS** and **Linux** (`ip`, `nmcli`).
 
-## Архитектура
-- **Data plane** — ядро Linux хоста: маршрутизация, nftables, NAT.
-- **Control plane** — Docker: FastAPI, веб-интерфейс, CLI по SSH, агент применения конфига.
-- Работает на любом Linux с Docker (Debian, Ubuntu, Fedora, Armbian на NanoPi…): сеть делает ядро хоста.
-  Внутри контейнера — Debian (python:3.12-slim).
+The host's Linux kernel does the routing, NAT and firewalling. The container is the control plane.
+One configuration file (`router.yaml`) is the source of truth. Every change is validated, applied
+atomically and snapshotted, and Safe Mode rolls it back if you lose access.
 
-## Режимы запуска (один образ)
-| Режим | Где | Сеть | Файл |
-|-------|-----|------|------|
-| dev   | рабочий ПК | свой namespace, хост не трогается | `docker-compose.yml` |
-| gns3  | GNS3 Docker-узел | свой namespace, eth0..N от GNS3 | `deploy/gns3/` |
-| host  | VM / сервер / железо | сеть сервера (`network_mode: host`) | `deploy/host/` |
+> OutpostGate Lite is the small sibling of **OutpostGate Pro**, which adds BIND 9 / Kea, dual WAN,
+> LAN segments, GRE, OSPF/BGP, QoS and monitoring. Lite stays light on purpose: **dnsmasq** for DHCP
+> and DNS, a single WAN and a single LAN.
 
-## Быстрый старт (dev)
+---
+
+## What it can do
+
+### Network
+- **WAN**: DHCP, static, or left to the system.
+- **LAN**: a bridge of the chosen ports. **dnsmasq** provides DHCP (pool, lease time, static leases)
+  and a caching DNS. Devices are reachable by name: `nas`, `nas.lan`.
+  If you change the LAN network, the DHCP pool and the static leases move to the new network.
+- **Firewall & NAT (nftables)**: zone rules (WAN / LAN / VPN), port forwarding **from WAN or from the
+  VPN tunnel**, lockout protection, counters, and a plain-language view of what the system rules do.
+- **Tools**: ping, traceroute, port scan, network scan, DNS lookup, ARP neighbours. Names resolve
+  through the router's own DNS, the same way LAN devices see them.
+
+### VPN: three tunnel types, one active at a time
+| Tunnel | Notes |
+|---|---|
+| **WireGuard** | import a `.conf`; full or split tunnel |
+| **AmneziaWG** (up to 3.1) | DPI-resistant WireGuard; paste a `vpn://` link or `.vpn` file straight from the Amnezia app |
+| **L2TP/IPsec** | strongSwan + xl2tpd, the classic corporate VPN |
+
+- **Full or split tunnel**, kill switch, NAT or site-to-site mode.
+- **Watchdog**: the tunnel reconnects by itself, with back-off, when the server goes silent. For
+  WireGuard/AmneziaWG that means no handshake for 3.5 minutes (host sleep, network change, a crashed
+  `amneziawg-go`). For L2TP it means PPP is not up.
+  The web UI and `/vpn print` show how many reconnects happened and why.
+- **Remote access through the tunnel**: manage the router (web, SSH, CLI, ping) from a phone on the
+  same VPN server, and forward ports from the tunnel to LAN devices (a PBX, a camera, a NAS).
+- **The router's own traffic bypasses a full tunnel**: updates, Docker Hub and apt go straight
+  through WAN, so maintenance never depends on the VPN. LAN devices still use the tunnel.
+
+### Operations
+Users with full or read-only roles, an audit log, backup/restore of `router.yaml`, automatic
+snapshots, Safe Mode, an installer for VMs and servers.
+
+---
+
+## Command line: RouterOS or Linux, your choice
+
+Connect with `ssh -p 2222 admin@192.168.88.1`. On the first login the CLI asks which syntax you
+prefer. Switch any time with `linux` or `routeros`.
+
+**MikroTik RouterOS style**: menus, abbreviations, `print detail`, row numbers, Tab completion.
+```
+[admin@office] > /ip address print
+[admin@office] > /ip firewall nat add chain=dstnat action=dst-nat protocol=udp dst-port=5060 to-addresses=192.168.88.20 in-interface-list=VPN
+[admin@office] > /vpn print
+[admin@office] > :resolve nas
+```
+
+**Linux style**: viewing commands run the real tools. Changes go through the router configuration,
+so nothing is lost on the next apply.
+```
+admin@office:~$ ip -br a
+admin@office:~$ ip route add 192.168.20.0/24 via 10.8.1.1
+admin@office:~$ nmcli c
+admin@office:~$ nmcli c mod lan ipv4.addresses 192.168.1.1/24
+admin@office:~$ nmcli c up amneziawg
+admin@office:~$ ping -c 3 nas
+```
+- Interactive sessions get an Ubuntu-style colored prompt and colored output (iproute2 colors,
+  nmcli states). Scripts get plain text.
+- Hints, help and messages come in **English, Russian or Hebrew**: switch with `sl1`, `sl2`, `sl3`.
+- `/…` runs a RouterOS command from the Linux syntax too.
+- **Ansible**: log in as `admin+cet1024w`, as `community.routeros` recommends, and you get a plain
+  RouterOS session with no questions. `without-paging` is accepted. Everything is also available
+  through the REST API.
+
+---
+
+## Web UI and API
+- Web UI on **port 80** (`http://<router LAN address>`), in English, Russian and Hebrew
+  (right-to-left), switchable without a reload.
+- REST API (FastAPI) on the same port. Interactive docs are at `/docs`.
+- First login: user `admin` with an empty password, allowed only from the LAN until you set a password.
+
+## Technologies
+| Layer | Stack |
+|---|---|
+| Control plane | Python 3.12, FastAPI, Pydantic v2, uvicorn, pyroute2, asyncssh, prompt_toolkit |
+| Web UI | plain HTML/CSS/JavaScript, no build step; i18n dictionary in `web/js/i18n-dict.js` |
+| Data plane | Linux kernel: bridge, nftables, policy routing |
+| Services | dnsmasq (DHCP + DNS) |
+| VPN | wireguard-tools, amneziawg-go / amneziawg-tools, strongSwan + xl2tpd |
+| Packaging | Docker (one image, three run modes), Bash installer |
+| Tests | pytest (models, firewall rulesets, CLI in both syntaxes, VPN watchdog, LAN, tools, installer) |
+
+## Run modes (one image)
+| Mode | Where | Network | Files |
+|---|---|---|---|
+| dev | your workstation | its own namespace; the host is untouched | `docker-compose.yml` |
+| gns3 | a GNS3 Docker node | its own namespace, eth0..N from GNS3 | `deploy/gns3/` |
+| host | VM / server / bare metal | the server's network (`network_mode: host`) | `deploy/host/`, `install.sh` |
+
+### Quick start (dev)
 ```bash
 docker compose up --build
 ```
-- Веб-интерфейс: http://localhost:8000 — пользователь `admin`, пароль пустой (только из локальной сети)
-- CLI в стиле MikroTik: `ssh -p 2222 admin@localhost` или `docker exec -it outpost-gate-lite-dev outpost`
-- Swagger: http://localhost:8000/docs
+Web UI: http://localhost:8001 · API docs: http://localhost:8001/docs · CLI: `ssh -p 2222 admin@localhost`
 
-## Языки интерфейса
-English (по умолчанию), Русский, עברית — переключатель внизу левого меню и на странице входа, без перезагрузки.
-Выбор запоминается в браузере; для иврита страница переходит в режим справа налево.
-Словарь — `web/js/i18n-dict.js` (ключ — русская фраза, значение — `[English, иврит]`);
-`tests/test_i18n.py` проверяет, что каждая фраза `index.html` в нём есть.
-
-## CLI
-Синтаксис MikroTik RouterOS, включая сокращения (`/ip addr pr`), `print detail`, номера строк из `print`.
+### Install on a VM or server
+Ubuntu 22.04/24.04 or Debian 12/13 with at least two network adapters:
+```bash
+cd outpost-gate
+sudo ./install.sh                    # wizard: WAN, LAN, admin password
+sudo ./install.sh --status
+sudo ./install.sh --update           # rebuild and restart after pulling new code
+sudo ./install.sh --update --api-port 8080   # move the web UI to another port
+sudo ./install.sh --uninstall        # --purge also removes the settings
 ```
-[admin@office] > /ip address print
-[admin@office] > /ip route
-[admin@office] /ip route> add dst-address=10.0.0.0/8 gateway=192.168.88.254
-[admin@office] /ip route> set 0 distance=5 comment="резерв"
-[admin@office] > /ip arp print
-[admin@office] > /ip dhcp-server lease make-static 3
-[admin@office] > /ip firewall filter add chain=input protocol=tcp dst-port=22 in-interface-list=WAN src-address=203.0.113.0/24
-[admin@office] > /ip firewall nat add chain=dstnat action=dst-nat protocol=tcp dst-port=8080 to-addresses=192.168.88.20 to-ports=80
-[admin@office] > /interface monitor-traffic eth0
-[admin@office] > /tool ip-scan address-range=192.168.88.0/24
-[admin@office] > /user add name=ivan group=read
-[admin@office] > /system shell        # bash; назад — exit или Ctrl-D
-```
-Меню: `/interface` (ethernet, bridge, wireguard, l2tp-client, monitor-traffic), `/ip` (address, route, arp,
-neighbor, pool, dhcp-server, dhcp-client, dns, service, firewall filter/nat), `/wan`, `/lan`, `/vpn`, `/system`
-(resource, identity, clock, routerboard, package, shell, reboot), `/user`, `/password`, `/log`, `/tool`
-(ping, traceroute, ip-scan, dns-lookup), `/export`.
-`?` — помощь в меню, `команда ?` — параметры команды, Tab — подсказки (и значения: интерфейсы, chain=, action=).
-Одна команда без входа: `ssh admin@router "/ip route print"`.
+Unattended: `sudo ./install.sh -y --wan ens18 --wan-mode none --lan ens19 --password '...'` (see `--help`).
 
-## Дорожная карта
-- [x] Каркас
-- [x] Advanced: IP Addresses, IP Routes (двигатель)
-- [x] WAN: DHCP-клиент / статика, автоопределение интерфейса
-- [x] LAN: мост br-lan, dnsmasq (DHCP + DNS), закреплённые адреса, NAT, базовый фаервол
-- [x] VPN → WireGuard: импорт .conf, full / split, kill switch, NAT или site-to-site
-- [x] VPN → AmneziaWG (amneziawg-go, обфускация), L2TP/IPsec (strongSwan + xl2tpd)
-- [x] Firewall: правила в стиле OCI Security Lists (входящие, транзит), проброс портов, счётчики, итоговый nftables
-- [x] Tools: ping (IPv4/IPv6), сканер портов, traceroute, DNS, соседи (ARP), сканер сети (ping + ARP)
-- [x] System: вход (admin без пароля при первом входе, как MikroTik), роли, пользователи, журнал, резервные копии и снимки, Safe Mode, ресурсы, перезапуск
-- [x] Status: WAN, VPN, LAN, система, трафик интерфейсов
-- [x] CLI в стиле MikroTik по SSH: ~70 команд, сокращения, print detail, set/move, Tab со значениями, /system shell
-- [x] Веб-интерфейс без раздела Advanced: адреса и маршруты — в CLI
-- [ ] Дальше: VLAN, смена MAC, DHCP-опция 66, мониторинг (Prometheus), HTTPS
+The installer:
+- loads the kernel modules and sets the sysctls;
+- hands the router's ports over from netplan / NetworkManager;
+- keeps Docker out of the firewall and clears a leftover `FORWARD DROP`;
+- gives the server its own DNS;
+- builds the image in the host network.
+
+## Project layout
+```
+app/api/        REST endpoints (FastAPI routers)
+app/models/     Pydantic models: validation of every config section
+app/services/   apply logic: nftables, netlink, dnsmasq, VPN (+ watchdog), tools
+app/cli/        SSH command line: RouterOS syntax (commands.py), Linux syntax (linux.py), colors/i18n (term.py)
+web/            web UI
+deploy/         run modes: host, gns3
+install.sh      installer for VMs and servers
+tests/          pytest
+```
+
+## Author
+Fedor Afrin, network & telecom engineer. Built with the help of Claude (Anthropic).
